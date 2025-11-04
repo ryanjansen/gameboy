@@ -1,3 +1,6 @@
+use std::fmt;
+
+#[derive(Debug)]
 struct Registers {
     a: u8,
     b: u8,
@@ -9,18 +12,7 @@ struct Registers {
     l: u8,
 }
 
-impl Registers {
-    fn get_bc(&self) -> u16 {
-        (self.b as u16) << 8
-        | self.c as u16
-    }
-
-    fn set_bc(&mut self, value: u16) {
-        self.b = ((value & 0xFF00) >> 8) as u8;
-        self.c = (value & 0xFF) as u8;
-    }
-}
-
+#[derive(Debug)]
 struct FlagsRegister {
     zero: bool,
     subtract: bool,
@@ -58,22 +50,69 @@ impl std::convert::From<u8> for FlagsRegister {
     }
 }
 
-struct CPU {
-    registers: Registers,
-    pc: u16,
-    bus: MemoryBus,
+impl FlagsRegister {
+    fn new() -> FlagsRegister {
+        FlagsRegister {
+            zero: true,
+            subtract: false,
+            half_carry: false,
+            carry: false,
+        }
+    }
+}
+
+impl Registers {
+    fn new() -> Registers {
+        Registers {
+            a: 0x01,
+            b: 0x00,
+            c: 0x13,
+            d: 0x00,
+            e: 0xD8,
+            f: FlagsRegister::new(),
+            h: 0x01,
+            l: 0x4D,
+        }
+    }
+
+    fn get_bc(&self) -> u16 {
+        (self.b as u16) << 8
+        | self.c as u16
+    }
+
+    fn set_bc(&mut self, value: u16) {
+        self.b = ((value & 0xFF00) >> 8) as u8;
+        self.c = (value & 0xFF) as u8;
+    }
 }
 
 struct MemoryBus {
     memory: [u8; 0xFFFF]
 }
 
+impl fmt::Debug for MemoryBus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryBus")
+         .field("length", &self.memory.len())
+         .finish()
+    }
+}
+
 impl MemoryBus {
+    fn new(ROM: [u8; 0xFFFF]) -> MemoryBus {
+        MemoryBus {
+            memory: [0x00; 0xFFFF]
+        }
+    }
+
     fn read_byte(&self, address: u16) -> u8 {
         self.memory[address as usize]
     }
 }
 
+enum ArithmeticTarget {
+    A, B, C, D, E, H, L,
+}
 
 enum Instruction {
     ADD(ArithmeticTarget),
@@ -90,6 +129,7 @@ impl Instruction {
     
     fn from_byte_prefixed(byte: u8) -> Option<Instruction> {
         match byte {
+
             _ => /* TODO: Add mapping for rest of instructions */ None
         }
     }
@@ -101,12 +141,28 @@ impl Instruction {
     }
 }
 
-
-enum ArithmeticTarget {
-    A, B, C, D, E, H, L,
+#[derive(Debug)]
+pub struct CPU {
+    registers: Registers,
+    pc: u16,
+    sp: u16,
+    bus: MemoryBus,
 }
 
 impl CPU {
+    pub fn new(ROM: [u8; 0xFFFF]) -> CPU {
+        CPU {
+            registers: Registers::new(),
+            pc: 0x0100,
+            sp: 0xFFFE,
+            bus: MemoryBus::new(ROM),
+        }
+    }
+
+    pub fn run(&self) {
+
+    }
+
     fn execute(&mut self, instruction: Instruction) -> u16 {
         match instruction {
            Instruction::ADD(target) => {
@@ -141,7 +197,7 @@ impl CPU {
         }
 
         let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
-            self.execute(instruction);
+            self.execute(instruction)
         } else {
             let description = format!("0x{}{:x}", if prefixed { "cb" } else { "" }, instruction_byte);
             panic!("Unknown instruction found for: {}", description);
@@ -149,7 +205,4 @@ impl CPU {
 
         self.pc = next_pc;
     }
-}
-
-fn main() {
 }
