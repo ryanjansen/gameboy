@@ -72,7 +72,7 @@ enum JumpTarget {
 
 type Vec = u8;
 
-enum Instruction {
+pub enum Instruction {
     LD(Dest, Source),
     LDH(Dest, Source),
     ADC(Operand),
@@ -86,10 +86,12 @@ enum Instruction {
     OR(Operand),
     XOR(Operand),
     BIT(BitIndex, Operand),
+    RES(BitIndex, Operand),
+    SET(BitIndex, Operand),
     RLCA,
     RRCA,
     RLA,
-    DAA,
+    RRA,
     CPL,
     SCF,
     CCF,
@@ -192,13 +194,32 @@ impl Instruction {
             ),
             // ADD SP, e8
             0o350 => ADD(Dest::RegisterPair(R16::SP), Operand::ImmSignedOffset),
+            // INC r8
+            0o004 | 0o014 | 0o024 | 0o034 | 0o044 | 0o054 | 0o064 | 0o074 => {
+                INC(Operand::Register(get_register(byte >> 3 & 0x07)))
+            }
+            // DEC r8
+            0o005 | 0o015 | 0o025 | 0o035 | 0o045 | 0o055 | 0o065 | 0o075 => {
+                DEC(Operand::Register(get_register(byte >> 3 & 0x07)))
+            }
+            // INC r16
+            0o003 | 0o023 | 0o043 | 0o063 => {
+                INC(Operand::RegisterPair(get_register_pair(byte >> 4 & 0x03)))
+            }
+            // DEC r16
+            0o013 | 0o033 | 0o053 | 0o073 => {
+                DEC(Operand::RegisterPair(get_register_pair(byte >> 4 & 0x03)))
+            }
+            // RLCA, RRCA, RLA, RRA, DAA, CPL, SCF, CCF
+            0o007 | 0o017 | 0o027 | 0o037 | 0o047 | 0o057 | 0o067 | 0o077 => {
+                get_flag_instr(byte >> 3 & 0x07)
+            }
             // JP imm16
             0o303 => JP(JumpTarget::Imm16),
             // JP HL
             0o351 => JP(JumpTarget::HL),
             // JP cond imm16
             0o302 | 0o312 | 0o322 | 0o332 => JPCOND(get_cond(byte >> 3 & 0x03), JumpTarget::Imm16),
-
             // JR e8
             0o030 => JR(JumpTarget::ImmSignedOffset),
             // JR cond e8
@@ -232,8 +253,29 @@ impl Instruction {
     }
 
     fn prefixed(byte: u8) -> Instruction {
+        use Instruction::*;
+
         match byte {
-            _ => panic!("Invalid Instruction ${:b} found", byte),
+            0o000..=0o007 => RLC(Operand::Register(get_register(byte & 0x07))),
+            0o010..=0o017 => RRC(Operand::Register(get_register(byte & 0x07))),
+            0o020..=0o027 => RL(Operand::Register(get_register(byte & 0x07))),
+            0o030..=0o037 => RR(Operand::Register(get_register(byte & 0x07))),
+            0o040..=0o047 => SLA(Operand::Register(get_register(byte & 0x07))),
+            0o050..=0o057 => SRA(Operand::Register(get_register(byte & 0x07))),
+            0o060..=0o067 => SWAP(Operand::Register(get_register(byte & 0x07))),
+            0o070..=0o077 => SRL(Operand::Register(get_register(byte & 0x07))),
+            0o100..=0o177 => BIT(
+                byte >> 3 & 0x07,
+                Operand::Register(get_register(byte & 0x07)),
+            ),
+            0o200..=0o277 => RES(
+                byte >> 3 & 0x07,
+                Operand::Register(get_register(byte & 0x07)),
+            ),
+            0o300..=0o377 => SET(
+                byte >> 3 & 0x07,
+                Operand::Register(get_register(byte & 0x07)),
+            ),
         }
     }
 }
@@ -330,6 +372,22 @@ fn get_alu_imm_instr(op_index: u8) -> Instruction {
         0b101 => XOR(Operand::Imm8),
         0b110 => OR(Operand::Imm8),
         0b111 => CP(Operand::Imm8),
+        _ => unreachable!("Invalid index for alu op"),
+    }
+}
+
+fn get_flag_instr(instr_index: u8) -> Instruction {
+    use Instruction::{CCF, CPL, DAA, RLA, RLCA, RRA, RRCA, SCF};
+
+    match instr_index {
+        0b000 => RLCA,
+        0b001 => RRCA,
+        0b010 => RLA,
+        0b011 => RRA,
+        0b100 => DAA,
+        0b101 => CPL,
+        0b110 => SCF,
+        0b111 => CCF,
         _ => unreachable!("Invalid index for alu op"),
     }
 }

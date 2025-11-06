@@ -13,7 +13,7 @@ pub struct Registers {
 }
 
 impl Registers {
-    fn new() -> Registers {
+    pub fn new() -> Registers {
         Registers {
             a: 0x01,
             b: 0x00,
@@ -23,6 +23,8 @@ impl Registers {
             f: FlagsRegister::new(),
             h: 0x01,
             l: 0x4D,
+            pc: 0x00,
+            sp: 0x01,
         }
     }
 

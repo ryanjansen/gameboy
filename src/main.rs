@@ -1,10 +1,8 @@
-mod cpu;
-use cpu::CPU;
-use std::fmt;
+use gameboy::cpu::CPU;
 
 fn main() {
-    let ROM: [u8; 0xFFFF] = [0; 0xFFFF];
-    let my_cpu: CPU = cpu::CPU::new(ROM);
+    let rom: [u8; 0xFFFF] = [0; 0xFFFF];
+    let my_cpu: CPU = CPU::new(rom);
     println!("{:?}", my_cpu);
     my_cpu.run();
     println!("{my_cpu:?}");

@@ -33,18 +33,20 @@ pub struct CPU {
 }
 
 impl CPU {
-    pub fn new(ROM: [u8; 0xFFFF]) -> CPU {
+    pub fn new(rom: [u8; 0xFFFF]) -> CPU {
         CPU {
             registers: Registers::new(),
             pc: 0x0100,
             sp: 0xFFFE,
-            bus: MemoryBus::new(ROM),
+            bus: MemoryBus::new(rom),
         }
     }
 
     pub fn run(&self) {}
 
-    fn execute(&mut self, instruction: Instruction) -> u16 {}
+    fn execute(&mut self, instruction: Instruction) -> u16 {
+        10
+    }
 
     fn step(&mut self) {
         let mut instruction_byte = self.bus.read_byte(self.pc);
@@ -53,18 +55,8 @@ impl CPU {
             instruction_byte = self.bus.read_byte(self.pc + 1);
         }
 
-        let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed)
-        {
-            self.execute(instruction)
-        } else {
-            let description = format!(
-                "0x{}{:x}",
-                if prefixed { "cb" } else { "" },
-                instruction_byte
-            );
-            panic!("Unknown instruction found for: {}", description);
-        };
-
-        self.pc = next_pc;
+        let instruction = Instruction::decode(instruction_byte, prefixed);
+        let instr_length = self.execute(instruction);
+        self.pc += instr_length;
     }
 }
