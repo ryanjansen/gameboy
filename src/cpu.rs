@@ -1,143 +1,26 @@
+use crate::instruction::Instruction;
+use crate::register::Registers;
 use std::fmt;
 
-#[derive(Debug)]
-struct Registers {
-    a: u8,
-    b: u8,
-    c: u8,
-    d: u8,
-    e: u8,
-    f: FlagsRegister,
-    h: u8,
-    l: u8,
-}
-
-#[derive(Debug)]
-struct FlagsRegister {
-    zero: bool,
-    subtract: bool,
-    half_carry: bool,
-    carry: bool
-}
-
-const ZERO_FLAG_BYTE_POSITION: u8 = 7;
-const SUBTRACT_FLAG_BYTE_POSITION: u8 = 6;
-const HALF_CARRY_FLAG_BYTE_POSITION: u8 = 5;
-const CARRY_FLAG_BYTE_POSITION: u8 = 4;
-
-impl std::convert::From<FlagsRegister> for u8 {
-    fn from(flag: FlagsRegister) -> u8 {
-        (if flag.zero       { 1 } else { 0 }) << ZERO_FLAG_BYTE_POSITION |
-        (if flag.subtract   { 1 } else { 0 }) << SUBTRACT_FLAG_BYTE_POSITION |
-        (if flag.half_carry { 1 } else { 0 }) << HALF_CARRY_FLAG_BYTE_POSITION |
-        (if flag.carry      { 1 } else { 0 }) << CARRY_FLAG_BYTE_POSITION 
-    }
-}
-
-impl std::convert::From<u8> for FlagsRegister {
-    fn from(byte: u8) -> Self {
-        let zero = ((byte >> ZERO_FLAG_BYTE_POSITION) & 0b1) != 0;
-        let subtract = ((byte >> SUBTRACT_FLAG_BYTE_POSITION) & 0b1) != 0;
-        let half_carry = ((byte >> HALF_CARRY_FLAG_BYTE_POSITION) & 0b1) != 0;
-        let carry = ((byte >> CARRY_FLAG_BYTE_POSITION) & 0b1) != 0;
-
-        FlagsRegister {
-            zero,
-            subtract,
-            half_carry,
-            carry
-        }
-    }
-}
-
-impl FlagsRegister {
-    fn new() -> FlagsRegister {
-        FlagsRegister {
-            zero: true,
-            subtract: false,
-            half_carry: false,
-            carry: false,
-        }
-    }
-}
-
-impl Registers {
-    fn new() -> Registers {
-        Registers {
-            a: 0x01,
-            b: 0x00,
-            c: 0x13,
-            d: 0x00,
-            e: 0xD8,
-            f: FlagsRegister::new(),
-            h: 0x01,
-            l: 0x4D,
-        }
-    }
-
-    fn get_bc(&self) -> u16 {
-        (self.b as u16) << 8
-        | self.c as u16
-    }
-
-    fn set_bc(&mut self, value: u16) {
-        self.b = ((value & 0xFF00) >> 8) as u8;
-        self.c = (value & 0xFF) as u8;
-    }
-}
-
 struct MemoryBus {
-    memory: [u8; 0xFFFF]
+    memory: [u8; 0xFFFF],
 }
 
 impl fmt::Debug for MemoryBus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MemoryBus")
-         .field("length", &self.memory.len())
-         .finish()
+            .field("length", &self.memory.len())
+            .finish()
     }
 }
 
 impl MemoryBus {
-    fn new(ROM: [u8; 0xFFFF]) -> MemoryBus {
-        MemoryBus {
-            memory: [0x00; 0xFFFF]
-        }
+    fn new(rom: [u8; 0xFFFF]) -> MemoryBus {
+        MemoryBus { memory: rom }
     }
 
     fn read_byte(&self, address: u16) -> u8 {
         self.memory[address as usize]
-    }
-}
-
-enum ArithmeticTarget {
-    A, B, C, D, E, H, L,
-}
-
-enum Instruction {
-    ADD(ArithmeticTarget),
-}
-
-impl Instruction {
-    fn from_byte(byte: u8, prefixed: bool) -> Option<Instruction> {
-        if prefixed {
-            Instruction::from_byte_prefixed(byte)
-        } else {
-            Instruction::from_byte_not_prefixed(byte)
-        }
-    }
-    
-    fn from_byte_prefixed(byte: u8) -> Option<Instruction> {
-        match byte {
-
-            _ => /* TODO: Add mapping for rest of instructions */ None
-        }
-    }
-
-    fn from_byte_not_prefixed(byte: u8) -> Option<Instruction> {
-        match byte {
-            _ => /* TODO: Add mapping for rest of instructions */ None
-        }
     }
 }
 
@@ -159,35 +42,9 @@ impl CPU {
         }
     }
 
-    pub fn run(&self) {
+    pub fn run(&self) {}
 
-    }
-
-    fn execute(&mut self, instruction: Instruction) -> u16 {
-        match instruction {
-           Instruction::ADD(target) => {
-               match target {
-                   ArithmeticTarget::C => {
-                       let value = self.registers.c;
-                       let new_value = self.add(value);
-                       self.registers.a = new_value;
-                       self.pc.wrapping_add(1)
-                   }
-                   _ => { self.pc }
-               }
-           }
-           _ => { self.pc }
-        }
-    }
-
-    fn add(&mut self, value: u8) -> u8 {
-        let (new_value, did_overflow) = self.registers.a.overflowing_add(value);
-        self.registers.f.zero = new_value == 0;
-        self.registers.f.subtract = false;
-        self.registers.f.carry = did_overflow;
-        self.registers.f.half_carry = (self.registers.a & 0xF) + (value & 0xF) > 0xF;
-        new_value
-    }
+    fn execute(&mut self, instruction: Instruction) -> u16 {}
 
     fn step(&mut self) {
         let mut instruction_byte = self.bus.read_byte(self.pc);
@@ -196,10 +53,15 @@ impl CPU {
             instruction_byte = self.bus.read_byte(self.pc + 1);
         }
 
-        let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
+        let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed)
+        {
             self.execute(instruction)
         } else {
-            let description = format!("0x{}{:x}", if prefixed { "cb" } else { "" }, instruction_byte);
+            let description = format!(
+                "0x{}{:x}",
+                if prefixed { "cb" } else { "" },
+                instruction_byte
+            );
             panic!("Unknown instruction found for: {}", description);
         };
 
