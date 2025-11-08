@@ -190,13 +190,13 @@ impl Instruction {
             0o342 => LDH(Dest::Indirect(Addr::C), Source::A),
             // LDH A, [C]
             0o362 => LDH(Dest::A, Source::Indirect(Addr::C)),
-            // ALU A, r8
+            // ADD, ADC, SUB, SBC, AND, XOR, OR, CP  A, r8
             0o200..=0o277 => get_alu_reg_instr(byte >> 3 & 0x07, byte & 0x07),
-            // ALU A, imm8
+            // ADD, ADC, SUB, SBC, AND, XOR, OR, CP  A, imm8
             0o306 | 0o316 | 0o326 | 0o336 | 0o346 | 0o356 | 0o366 | 0o376 => {
                 get_alu_imm_instr(byte >> 3 & 0x07)
             }
-            // ADD hl, r16
+            // ADD HL, r16
             0o011 | 0o031 | 0o051 | 0o071 => ADD(
                 Dest::RegisterPair(R16::HL),
                 Operand::RegisterPair(get_register_pair(byte & 0x07)),
