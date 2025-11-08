@@ -1,4 +1,5 @@
-enum R8 {
+#[derive(Debug)]
+pub enum R8 {
     A,
     B,
     C,
@@ -9,7 +10,8 @@ enum R8 {
     IndirectHL,
 }
 
-enum Addr {
+#[derive(Debug)]
+pub enum Addr {
     HL,
     RegisterPair(R16),
     Imm8,
@@ -17,7 +19,8 @@ enum Addr {
     C,
 }
 
-enum R16 {
+#[derive(Debug)]
+pub enum R16 {
     BC,
     DE,
     HL,
@@ -27,26 +30,29 @@ enum R16 {
     HLD,
 }
 
-enum Cond {
+#[derive(Debug)]
+pub enum Cond {
     NZ,
     Z,
     NC,
     C,
 }
 
-type BitIndex = u8;
-type Imm8 = u8;
-type Imm16 = u16;
-type ImmSignedOffset = i8;
+pub type BitIndex = u8;
+pub type Imm8 = u8;
+pub type Imm16 = u16;
+pub type ImmSignedOffset = i8;
 
-enum Dest {
+#[derive(Debug)]
+pub enum Dest {
     Register(R8),
     RegisterPair(R16),
     Indirect(Addr),
     A,
 }
 
-enum Source {
+#[derive(Debug)]
+pub enum Source {
     Register(R8),
     RegisterPair(R16),
     Imm8,
@@ -56,7 +62,8 @@ enum Source {
     SPWithImmSignedOffset,
 }
 
-enum Operand {
+#[derive(Debug)]
+pub enum Operand {
     Register(R8),
     RegisterPair(R16),
     Imm8,
@@ -64,14 +71,16 @@ enum Operand {
     A,
 }
 
-enum JumpTarget {
+#[derive(Debug)]
+pub enum JumpTarget {
     HL,
     Imm16,
     ImmSignedOffset,
 }
 
-type Vec = u8;
+pub type Vec = u8;
 
+#[derive(Debug)]
 pub enum Instruction {
     LD(Dest, Source),
     LDH(Dest, Source),
@@ -388,6 +397,6 @@ fn get_flag_instr(instr_index: u8) -> Instruction {
         0b101 => CPL,
         0b110 => SCF,
         0b111 => CCF,
-        _ => unreachable!("Invalid index for alu op"),
+        _ => unreachable!("Invalid index for flag instruction"),
     }
 }
