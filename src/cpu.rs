@@ -4,6 +4,11 @@ use std::fmt;
 
 type Cycles = u16;
 
+struct InstrInfo {
+    length: u16,
+    cycles: Cycles,
+}
+
 struct Memory {
     memory: [u8; 0xFFFF],
 }
@@ -31,16 +36,17 @@ impl Memory {
 }
 
 pub struct Flags {
-    pub zero: bool,
-    pub subtract: bool,
-    pub half_carry: bool,
-    pub carry: bool,
+    pub zero: Option<bool>,
+    pub subtract: Option<bool>,
+    pub half_carry: Option<bool>,
+    pub carry: Option<bool>,
 }
 
 #[derive(Debug)]
 pub struct CPU {
     registers: Registers,
     memory: Memory,
+    ime: bool,
 }
 
 impl CPU {
@@ -48,6 +54,7 @@ impl CPU {
         CPU {
             registers: Registers::new(),
             memory: Memory::new(rom),
+            ime: false,
         }
     }
 
@@ -65,16 +72,26 @@ impl CPU {
         }
 
         let instruction = Instruction::decode(instruction_byte, prefixed);
-        let instr_length = self.execute(instruction);
+        let InstrInfo {
+            length: instr_length,
+            cycles: _instr_cycles,
+        } = self.execute(instruction);
         self.registers.pc += instr_length;
+        // self.gpu.step(instr_cycles);
     }
 
-    fn execute(&mut self, instruction: Instruction) -> Cycles {
+    fn execute(&mut self, instruction: Instruction) -> InstrInfo {
         use Instruction::*;
 
         match instruction {
-            NOP => 1,
-            STOP => 2,
+            NOP => InstrInfo {
+                length: 1,
+                cycles: 1,
+            },
+            STOP => InstrInfo {
+                length: 2,
+                cycles: 0,
+            },
             HALT => todo!("Halt"),
             LD(dest, src) => self.load(dest, src),
             LDH(dest, src) => self.load_with_io(dest, src),
@@ -95,10 +112,11 @@ impl CPU {
             DAA => self.daa(),
             CPL => self.cpl(),
             SCF => self.scf(),
-            CCF => self.ccp(),
+            CCF => self.ccf(),
             RLC(operand) => self.rlc(operand),
             RRC(operand) => self.rrc(operand),
             RL(operand) => self.rl(operand),
+            RR(operand) => self.rr(operand),
             SLA(operand) => self.sla(operand),
             SRA(operand) => self.sra(operand),
             SWAP(operand) => self.swap(operand),
@@ -108,6 +126,8 @@ impl CPU {
             SET(bit_index, operand) => self.set(bit_index, operand),
             JP(tgt) => self.jump(tgt),
             JPCOND(cond, tgt) => self.jump_cond(cond, tgt),
+            CALL => self.call(),
+            CALLCOND(cond) => self.call_cond(cond),
             RET => self.ret(),
             RETI => self.reti(),
             RETCOND(cond) => self.ret_cond(cond),
@@ -206,7 +226,11 @@ impl CPU {
     fn get_addr_val(&mut self, addr: Addr) -> u16 {
         match addr {
             Addr::RegisterPair(reg) => self.get_register_pair_val(reg),
-            Addr::Imm8WithIo => self.get_imm8() as u16 + 0xFF00,
+            Addr::Imm8WithIo => {
+                let signed_offset = self.get_imm8() as i8;
+                let (sum, _) = CPU::add_u16_i8(0xFF00, signed_offset);
+                sum
+            }
             Addr::Imm16 => self.get_imm16(),
             Addr::CWithIo => self.get_register_val(R8::C) as u16 + 0xFF00,
         }
@@ -227,7 +251,43 @@ impl CPU {
     }
 
     fn is_bit3_overflow(left: u8, right: u8) -> bool {
-        (left & 0b00001100) & (right & 0b00001100) == 0b00001000
+        (((left & 0xF) + (right & 0xF)) & 0x10) == 0x10
+    }
+
+    fn is_bit11_overflow(left: u16, right: u16) -> bool {
+        (((left & 0x0FFF) + (right & 0x0FFFF)) & 0x1000) == 0x1000
+    }
+
+    fn is_bit4_borrowed(left: u8, right: u8) -> bool {
+        (left & 0x0F) < (right & 0x0F)
+    }
+
+    fn add_u8(left: u8, right: u8) -> (u8, Flags) {
+        let (sum, is_overflow) = left.overflowing_add(right);
+        let is_half_carry = CPU::is_bit3_overflow(left, right);
+        (
+            sum,
+            Flags {
+                zero: Some(sum == 0),
+                subtract: Some(false),
+                half_carry: Some(is_half_carry),
+                carry: Some(is_overflow),
+            },
+        )
+    }
+
+    fn add_u16(left: u16, right: u16) -> (u16, Flags) {
+        let (sum, is_overflow) = left.overflowing_add(right);
+        let is_half_carry = CPU::is_bit11_overflow(left, right);
+        (
+            sum,
+            Flags {
+                zero: None,
+                subtract: Some(false),
+                half_carry: Some(is_half_carry),
+                carry: Some(is_overflow),
+            },
+        )
     }
 
     fn add_u16_i8(left: u16, right: i8) -> (u16, Flags) {
@@ -237,17 +297,88 @@ impl CPU {
         (
             sum,
             Flags {
-                zero: false,
-                subtract: false,
-                half_carry: is_half_carry,
-                carry: is_overflow,
+                zero: Some(false),
+                subtract: Some(false),
+                half_carry: Some(is_half_carry),
+                carry: Some(is_overflow),
             },
         )
     }
 
+    fn add_with_carry(left: u8, right: u8, is_carry: bool) -> (u8, Flags) {
+        let (sum, is_overflow) = left.overflowing_add(right);
+        let (final_sum, final_is_overflow) = sum.overflowing_add(is_carry as u8);
+        let is_half_carry = CPU::is_bit3_overflow(sum, is_carry as u8);
+        (
+            final_sum,
+            Flags {
+                zero: Some(final_sum == 0),
+                subtract: Some(false),
+                half_carry: Some(is_half_carry),
+                carry: Some(final_is_overflow || is_overflow),
+            },
+        )
+    }
+
+    fn sub_u8(left: u8, right: u8) -> (u8, Flags) {
+        let (diff, is_overflow) = left.overflowing_sub(right);
+        let is_half_carry = CPU::is_bit4_borrowed(left, right);
+        (
+            diff,
+            Flags {
+                zero: Some(diff == 0),
+                subtract: Some(true),
+                half_carry: Some(is_half_carry),
+                carry: Some(is_overflow),
+            },
+        )
+    }
+
+    fn sub_with_carry(left: u8, right: u8, is_carry: bool) -> (u8, Flags) {
+        let carry = is_carry as u8;
+        let (diff, is_overflow) = left.overflowing_sub(right);
+        let (final_diff, final_is_overflow) = diff.overflowing_sub(carry);
+        (
+            final_diff,
+            Flags {
+                zero: Some(final_diff == 0),
+                subtract: Some(false),
+                half_carry: Some(
+                    (left & 0x0F).wrapping_sub(right & 0x0F).wrapping_sub(carry) > 0x0F,
+                ),
+                carry: Some(final_is_overflow || is_overflow),
+            },
+        )
+    }
+
+    fn is_cond_true(&self, cond: Cond) -> bool {
+        match cond {
+            Cond::NZ => !self.registers.is_zero(),
+            Cond::Z => self.registers.is_zero(),
+            Cond::NC => !self.registers.is_carry(),
+            Cond::C => self.registers.is_carry(),
+        }
+    }
+
+    fn push_to_stack(&mut self, val: u16) {
+        let lower = (val & 0xF) as u8;
+        let upper = (val >> 4) as u8;
+        self.registers.sp -= 1;
+        self.memory.write_byte(self.registers.sp, upper);
+        self.registers.sp -= 1;
+        self.memory.write_byte(self.registers.sp, lower);
+    }
+
+    fn pop_from_stack(&mut self) -> u16 {
+        let lower = self.memory.read_byte(self.registers.sp) as u16;
+        self.registers.sp += 1;
+        let upper = self.memory.read_byte(self.registers.sp) as u16;
+        (upper << 8) | lower
+    }
+
     // Instruction Functions
 
-    fn load(&mut self, dest: Dest, src: Source) -> Cycles {
+    fn load(&mut self, dest: Dest, src: Source) -> InstrInfo {
         // dest: [imm16], r16, r8, [r16mem], A, HL, SP
         // src: imm8, imm16, r8, SP, SP + e8, A, [r16mem],
         //
@@ -258,19 +389,28 @@ impl CPU {
             (Dest::RegisterPair(reg_pair), Source::Imm16) => {
                 let src_val = self.get_imm16();
                 self.set_register_pair(reg_pair, src_val);
-                3
+                InstrInfo {
+                    length: 3,
+                    cycles: 3,
+                }
             }
             // LD [r16mem], A
             (Dest::Indirect(Addr::RegisterPair(r16mem)), Source::A) => {
                 let src_val = self.get_register_val(R8::A);
                 self.set_indirect(Addr::RegisterPair(r16mem), src_val);
-                2
+                InstrInfo {
+                    length: 1,
+                    cycles: 2,
+                }
             }
             // LD A, [r16mem]
             (Dest::A, Source::Indirect(Addr::RegisterPair(r16mem))) => {
                 let src_val = self.get_indirect_val(Addr::RegisterPair(r16mem));
                 self.set_register(R8::A, src_val);
-                2
+                InstrInfo {
+                    length: 1,
+                    cycles: 2,
+                }
             }
             // LD [imm16], SP
             (Dest::Indirect(Addr::Imm16), Source::RegisterPair(R16::SP)) => {
@@ -280,31 +420,47 @@ impl CPU {
                 let addr_val = self.get_imm16();
                 self.memory.write_byte(addr_val, lower);
                 self.memory.write_byte(addr_val + 1, upper);
-                5
+                InstrInfo {
+                    length: 3,
+                    cycles: 5,
+                }
             }
             // LD r8, imm8
             (Dest::Register(reg), Source::Imm8) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 3 } else { 2 };
                 let src_val = self.get_imm8();
                 self.set_register(reg, src_val);
-                2
+                InstrInfo { length: 2, cycles }
             }
             // LD r8, r8
             (Dest::Register(dest_reg), Source::Register(src_reg)) => {
+                let cycles =
+                    if matches!(dest_reg, R8::IndirectHL) || matches!(src_reg, R8::IndirectHL) {
+                        8
+                    } else {
+                        4
+                    };
                 let src_val = self.get_register_val(src_reg);
                 self.set_register(dest_reg, src_val);
-                1
+                InstrInfo { length: 1, cycles }
             }
             // LD [imm16], A
             (Dest::Indirect(Addr::Imm16), Source::A) => {
                 let src_val = self.get_register_val(R8::A);
                 self.set_indirect(Addr::Imm16, src_val);
-                4
+                InstrInfo {
+                    length: 2,
+                    cycles: 3,
+                }
             }
             // LD A, [imm16]
             (Dest::A, Source::Indirect(Addr::Imm16)) => {
                 let src_val = self.get_indirect_val(Addr::Imm16);
                 self.set_register(R8::A, src_val);
-                4
+                InstrInfo {
+                    length: 2,
+                    cycles: 3,
+                }
             }
             // LD HL, SP + e8
             (Dest::RegisterPair(R16::HL), Source::SPWithImmSignedOffset) => {
@@ -313,171 +469,908 @@ impl CPU {
                 let (sum, flags) = CPU::add_u16_i8(sp_val, signed_offset);
                 self.set_register_pair(R16::HL, sum);
                 self.set_flags(flags);
-                3
+                InstrInfo {
+                    length: 2,
+                    cycles: 3,
+                }
             }
             // LD SP, HL
             (Dest::RegisterPair(R16::SP), Source::RegisterPair(R16::HL)) => {
                 let src_val = self.get_register_pair_val(R16::HL);
                 self.set_register_pair(R16::SP, src_val);
-                2
+                InstrInfo {
+                    length: 1,
+                    cycles: 2,
+                }
             }
             _ => unreachable!("{}", invalid_error_msg),
         }
     }
 
-    fn load_with_io(&mut self, dest: Dest, src: Source) -> u16 {
-        0
+    fn load_with_io(&mut self, dest: Dest, src: Source) -> InstrInfo {
+        let invalid_error_msg = format!(
+            "Invalid load with io instruction LDH {:?} {:?}",
+            &dest, &src
+        );
+
+        match (dest, src) {
+            (Dest::Indirect(Addr::CWithIo), Source::A) => {
+                let src_val = self.get_register_val(R8::A);
+                self.set_indirect(Addr::CWithIo, src_val);
+                InstrInfo {
+                    length: 1,
+                    cycles: 2,
+                }
+            }
+            (Dest::A, Source::Indirect(Addr::CWithIo)) => {
+                let src_val = self.get_indirect_val(Addr::CWithIo);
+                self.set_register(R8::A, src_val);
+                InstrInfo {
+                    length: 1,
+                    cycles: 2,
+                }
+            }
+            (Dest::Indirect(Addr::Imm8WithIo), Source::A) => {
+                let src_val = self.get_register_val(R8::A);
+                self.set_indirect(Addr::Imm8WithIo, src_val);
+                InstrInfo {
+                    length: 2,
+                    cycles: 3,
+                }
+            }
+            (Dest::A, Source::Indirect(Addr::Imm8WithIo)) => {
+                let src_val = self.get_indirect_val(Addr::Imm8WithIo);
+                self.set_register(R8::A, src_val);
+                InstrInfo {
+                    length: 2,
+                    cycles: 3,
+                }
+            }
+            _ => unreachable!("{}", invalid_error_msg),
+        }
     }
 
-    fn alu_add(&mut self, dest: Dest, operand: Operand) -> u16 {
-        0
+    fn alu_add(&mut self, dest: Dest, operand: Operand) -> InstrInfo {
+        let invalid_error_msg = format!("Invalid add instruction ADD {:?} {:?}", &dest, &operand);
+
+        match (dest, operand) {
+            (Dest::RegisterPair(R16::HL), Operand::RegisterPair(reg)) => {
+                let reg_val = self.get_register_pair_val(reg);
+                let hl_val = self.get_register_pair_val(R16::HL);
+                let (sum, flags) = CPU::add_u16(hl_val, reg_val);
+                self.set_flags(flags);
+                self.set_register_pair(R16::HL, sum);
+                InstrInfo {
+                    length: 3,
+                    cycles: 3,
+                }
+            }
+            (Dest::A, Operand::Register(reg)) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let (sum, flags) = CPU::add_u8(a_val, reg_val);
+                self.set_flags(flags);
+                self.set_register(R8::A, sum);
+                InstrInfo { length: 3, cycles }
+            }
+            (Dest::A, Operand::Imm8) => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let (sum, flags) = CPU::add_u8(a_val, imm_val);
+                self.set_flags(flags);
+                self.set_register(R8::A, sum);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            (Dest::RegisterPair(R16::SP), Operand::ImmSignedOffset) => {
+                let signed_offset = self.get_imm8() as i8;
+                let sp_val = self.get_register_pair_val(R16::SP);
+                let (sum, flags) = CPU::add_u16_i8(sp_val, signed_offset);
+                self.set_flags(flags);
+                self.set_register_pair(R16::SP, sum);
+                InstrInfo {
+                    length: 2,
+                    cycles: 4,
+                }
+            }
+            _ => unreachable!("{}", invalid_error_msg),
+        }
     }
 
-    fn adc(&mut self, operand: Operand) -> u16 {
-        0
+    fn adc(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Imm8 => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let (sum, flags) = CPU::add_with_carry(imm_val, a_val, self.registers.is_carry());
+                self.set_flags(flags);
+                self.set_register(R8::A, sum);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let (sum, flags) = CPU::add_with_carry(reg_val, a_val, self.registers.is_carry());
+                self.set_flags(flags);
+                self.set_register(R8::A, sum);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for ADC"),
+        }
     }
 
-    fn sub(&mut self, operand: Operand) -> u16 {
-        0
+    fn sub(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Imm8 => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let (diff, flags) = CPU::sub_u8(imm_val, a_val);
+                self.set_flags(flags);
+                self.set_register(R8::A, diff);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let (diff, flags) = CPU::sub_u8(reg_val, a_val);
+                self.set_flags(flags);
+                self.set_register(R8::A, diff);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for SUB"),
+        }
     }
 
-    fn sbc(&mut self, operand: Operand) -> u16 {
-        0
+    fn sbc(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Imm8 => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let (diff, flags) = CPU::sub_with_carry(imm_val, a_val, self.registers.is_carry());
+                self.set_flags(flags);
+                self.set_register(R8::A, diff);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let (diff, flags) = CPU::sub_with_carry(reg_val, a_val, self.registers.is_carry());
+                self.set_flags(flags);
+                self.set_register(R8::A, diff);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for SBC"),
+        }
     }
 
-    fn and(&mut self, operand: Operand) -> u16 {
-        0
+    fn and(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Imm8 => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let result = a_val & imm_val;
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(false),
+                    half_carry: Some(true),
+                    carry: Some(false),
+                });
+                self.set_register(R8::A, result);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let result = a_val & reg_val;
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(false),
+                    half_carry: Some(true),
+                    carry: Some(false),
+                });
+                self.set_register(R8::A, result);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for AND"),
+        }
     }
 
-    fn xor(&mut self, operand: Operand) -> u16 {
-        0
+    fn xor(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Imm8 => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let result = a_val ^ imm_val;
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some(false),
+                });
+                self.set_register(R8::A, result);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let result = a_val ^ reg_val;
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some(false),
+                });
+                self.set_register(R8::A, result);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for xor"),
+        }
     }
 
-    fn or(&mut self, operand: Operand) -> u16 {
-        0
+    fn or(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Imm8 => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let result = a_val | imm_val;
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some(false),
+                });
+                self.set_register(R8::A, result);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let result = a_val | reg_val;
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some(false),
+                });
+                self.set_register(R8::A, result);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand {:?} for OR", operand),
+        }
     }
 
-    fn cp(&mut self, operand: Operand) -> u16 {
-        0
+    fn cp(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Imm8 => {
+                let imm_val = self.get_imm8();
+                let a_val = self.get_register_val(R8::A);
+                let (_, flags) = CPU::sub_u8(a_val, imm_val);
+                self.set_flags(flags);
+                InstrInfo {
+                    length: 2,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let a_val = self.get_register_val(R8::A);
+                let (_, flags) = CPU::sub_u8(a_val, reg_val);
+                self.set_flags(flags);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for CP"),
+        }
     }
 
-    fn inc(&mut self, operand: Operand) -> u16 {
-        0
+    fn inc(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::RegisterPair(reg) => {
+                let reg_val = self.get_register_pair_val(reg);
+                let result = reg_val + 1;
+                self.set_register_pair(reg, result);
+                InstrInfo {
+                    length: 1,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 3 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let result = reg_val.wrapping_add(1);
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(false),
+                    half_carry: Some(CPU::is_bit3_overflow(reg_val, 1)),
+                    carry: None,
+                });
+                self.set_register(R8::A, result);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for INC"),
+        }
     }
 
-    fn dec(&mut self, operand: Operand) -> u16 {
-        0
+    fn dec(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::RegisterPair(reg) => {
+                let reg_val = self.get_register_pair_val(reg);
+                let result = reg_val.wrapping_sub(1);
+                self.set_register_pair(reg, result);
+                InstrInfo {
+                    length: 1,
+                    cycles: 2,
+                }
+            }
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 3 } else { 1 };
+                let reg_val = self.get_register_val(reg);
+                let result = reg_val.wrapping_sub(1);
+                self.set_flags(Flags {
+                    zero: Some(result == 0),
+                    subtract: Some(true),
+                    half_carry: Some(CPU::is_bit4_borrowed(reg_val, 1)),
+                    carry: None,
+                });
+                self.set_register(R8::A, result);
+                InstrInfo { length: 1, cycles }
+            }
+            _ => unreachable!("Illegal operand for DEC"),
+        }
     }
 
-    fn rlca(&mut self) -> u16 {
-        0
+    fn rlca(&mut self) -> InstrInfo {
+        let a_val = self.get_register_val(R8::A);
+        let rotated_val = a_val.rotate_left(1);
+        self.set_register(R8::A, rotated_val);
+        self.set_flags(Flags {
+            zero: Some(false),
+            subtract: Some(false),
+            half_carry: Some(false),
+            carry: Some((a_val >> 8) == 0x1),
+        });
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn rrca(&mut self) -> u16 {
-        0
+    fn rrca(&mut self) -> InstrInfo {
+        let a_val = self.get_register_val(R8::A);
+        let rotated_val = a_val.rotate_right(1);
+        self.set_register(R8::A, rotated_val);
+        self.set_flags(Flags {
+            zero: Some(false),
+            subtract: Some(false),
+            half_carry: Some(false),
+            carry: Some((a_val & 0x1) == 0x1),
+        });
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn rla(&mut self) -> u16 {
-        0
+    fn rla(&mut self) -> InstrInfo {
+        let a_val = self.get_register_val(R8::A);
+        let rotated_val = a_val.rotate_left(1) & (self.registers.is_carry() as u8);
+        self.set_register(R8::A, rotated_val);
+        self.set_flags(Flags {
+            zero: Some(false),
+            subtract: Some(false),
+            half_carry: Some(false),
+            carry: Some((a_val >> 8) == 0x1),
+        });
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn rra(&mut self) -> u16 {
-        0
+    fn rra(&mut self) -> InstrInfo {
+        let a_val = self.get_register_val(R8::A);
+        let rotated_val = a_val.rotate_right(1) & (self.registers.is_carry() as u8);
+        self.set_register(R8::A, rotated_val);
+        self.set_flags(Flags {
+            zero: Some(false),
+            subtract: Some(false),
+            half_carry: Some(false),
+            carry: Some((a_val & 0x1) == 0x1),
+        });
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn daa(&mut self) -> u16 {
-        0
+    fn daa(&mut self) -> InstrInfo {
+        let a_val = self.get_register_val(R8::A);
+        if self.registers.is_subtract() {
+            let mut adj: u8 = 0;
+            if self.registers.is_half_carry() {
+                adj += 0x6;
+            }
+            if self.registers.is_carry() {
+                adj += 0x60;
+            }
+            let (diff, flags) = CPU::sub_u8(a_val, adj);
+            self.set_flags(Flags {
+                zero: flags.zero,
+                subtract: None,
+                half_carry: Some(false),
+                carry: flags.carry,
+            });
+            self.set_register(R8::A, diff);
+        } else {
+            let mut adj: u8 = 0;
+            if self.registers.is_half_carry() || a_val & 0xF > 0x9 {
+                adj += 0x6;
+            }
+            if self.registers.is_carry() || a_val > 0x99 {
+                adj += 0x60;
+            }
+            let (sum, flags) = CPU::add_u8(a_val, adj);
+            self.set_flags(Flags {
+                zero: flags.zero,
+                subtract: None,
+                half_carry: Some(false),
+                carry: flags.carry,
+            });
+            self.set_register(R8::A, sum);
+        }
+
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn cpl(&mut self) -> u16 {
-        0
+    fn cpl(&mut self) -> InstrInfo {
+        self.set_register(R8::A, !self.get_register_val(R8::A));
+        self.set_flags(Flags {
+            zero: None,
+            subtract: Some(true),
+            half_carry: Some(true),
+            carry: None,
+        });
+
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn scf(&mut self) -> u16 {
-        0
+    fn scf(&mut self) -> InstrInfo {
+        self.set_flags(Flags {
+            zero: None,
+            subtract: Some(false),
+            half_carry: Some(false),
+            carry: Some(true),
+        });
+
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn ccp(&mut self) -> u16 {
-        0
+    fn ccf(&mut self) -> InstrInfo {
+        self.set_flags(Flags {
+            zero: None,
+            subtract: Some(false),
+            half_carry: Some(false),
+            carry: Some(!self.registers.is_carry()),
+        });
+
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 
-    fn rlc(&mut self, operand: Operand) -> u16 {
-        0
+    fn rlc(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let rotated_val = reg_val.rotate_left(1);
+                self.set_register(reg, rotated_val);
+                self.set_flags(Flags {
+                    zero: Some(rotated_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some((reg_val >> 8) == 0x1),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+            _ => unreachable!("Illegal operand for RLC"),
+        }
     }
 
-    fn rrc(&mut self, operand: Operand) -> u16 {
-        0
+    fn rrc(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let rotated_val = reg_val.rotate_right(1);
+                self.set_register(reg, rotated_val);
+                self.set_flags(Flags {
+                    zero: Some(rotated_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some((reg_val & 0x1) == 0x1),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+            _ => unreachable!("Illegal operand for RRC"),
+        }
     }
 
-    fn rl(&mut self, operand: Operand) -> u16 {
-        0
+    fn rl(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let rotated_val = reg_val.rotate_left(1) & (self.registers.is_carry() as u8);
+                self.set_register(reg, rotated_val);
+                self.set_flags(Flags {
+                    zero: Some(rotated_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some((reg_val >> 8) == 0x1),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for RL"),
+        }
     }
 
-    fn sla(&mut self, operand: Operand) -> u16 {
-        0
+    fn rr(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let rotated_val = reg_val.rotate_right(1) & (self.registers.is_carry() as u8);
+                self.set_register(reg, rotated_val);
+                self.set_flags(Flags {
+                    zero: Some(rotated_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some((reg_val & 0x1) == 0x1),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for RR"),
+        }
     }
 
-    fn sra(&mut self, operand: Operand) -> u16 {
-        0
+    fn sla(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let shifted_val = reg_val << 1;
+                self.set_register(reg, shifted_val);
+                self.set_flags(Flags {
+                    zero: Some(shifted_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some((reg_val >> 8) == 0x1),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for SLA"),
+        }
     }
 
-    fn swap(&mut self, operand: Operand) -> u16 {
-        0
+    fn sra(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let shifted_val = ((reg_val as i8) >> 2) as u8;
+                self.set_register(reg, shifted_val);
+                self.set_flags(Flags {
+                    zero: Some(shifted_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some((reg_val & 0x1) == 0x1),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for SRA"),
+        }
     }
 
-    fn srl(&mut self, operand: Operand) -> u16 {
-        0
+    fn swap(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let lower = reg_val & 0x0F;
+                let upper = reg_val >> 4;
+                let swapped_val = (lower << 4) | upper;
+                self.set_register(reg, swapped_val);
+                self.set_flags(Flags {
+                    zero: Some(swapped_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some(false),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for SWAP"),
+        }
     }
 
-    fn bit(&mut self, bit_index: BitIndex, operand: Operand) -> u16 {
-        0
+    fn srl(&mut self, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                let shifted_val = reg_val >> 2;
+                self.set_register(reg, shifted_val);
+                self.set_flags(Flags {
+                    zero: Some(shifted_val == 0),
+                    subtract: Some(false),
+                    half_carry: Some(false),
+                    carry: Some((reg_val & 1) == 1),
+                });
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for SRL"),
+        }
     }
 
-    fn res(&mut self, bit_index: BitIndex, operand: Operand) -> u16 {
-        0
+    fn bit(&mut self, bit_index: BitIndex, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 3 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                self.set_flags(Flags {
+                    zero: Some((reg_val >> bit_index & 1) == 0),
+                    subtract: Some(false),
+                    half_carry: Some(true),
+                    carry: None,
+                });
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for BIT"),
+        }
     }
 
-    fn set(&mut self, bit_index: BitIndex, operand: Operand) -> u16 {
-        0
+    fn res(&mut self, bit_index: BitIndex, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                self.set_register(reg, reg_val & (0 << bit_index));
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for RES"),
+        }
     }
 
-    fn jump(&mut self, tgt: JumpTarget) -> u16 {
-        0
+    fn set(&mut self, bit_index: BitIndex, operand: Operand) -> InstrInfo {
+        match operand {
+            Operand::Register(reg) => {
+                let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
+                let reg_val = self.get_register_val(reg);
+                self.set_register(reg, reg_val | (1 << bit_index));
+                InstrInfo { length: 2, cycles }
+            }
+
+            _ => unreachable!("Illegal operand for SET"),
+        }
     }
 
-    fn jump_cond(&mut self, cond: Cond, tgt: JumpTarget) -> u16 {
-        0
+    fn jump(&mut self, tgt: JumpTarget) -> InstrInfo {
+        match tgt {
+            JumpTarget::Imm16 => {
+                let addr = self.get_imm16();
+                self.registers.pc = addr;
+                InstrInfo {
+                    length: 0, // To prevent moving PC after jump, actual is 3
+                    cycles: 4,
+                }
+            }
+            JumpTarget::HL => {
+                let addr = self.get_register_pair_val(R16::HL);
+                self.registers.pc = addr;
+                InstrInfo {
+                    length: 0,
+                    cycles: 1,
+                }
+            }
+            JumpTarget::ImmSignedOffset => {
+                let signed_offset = self.get_imm8() as i8;
+                let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
+                self.registers.pc = addr;
+                InstrInfo {
+                    length: 0,
+                    cycles: 3,
+                }
+            }
+        }
     }
 
-    fn ret(&mut self) -> u16 {
-        0
+    fn jump_cond(&mut self, cond: Cond, tgt: JumpTarget) -> InstrInfo {
+        match tgt {
+            JumpTarget::Imm16 => {
+                if self.is_cond_true(cond) {
+                    let addr = self.get_imm16();
+                    self.registers.pc = addr;
+                    InstrInfo {
+                        length: 0, // To prevent moving PC after jump, actual is 3
+                        cycles: 4,
+                    }
+                } else {
+                    InstrInfo {
+                        length: 3,
+                        cycles: 3,
+                    }
+                }
+            }
+            JumpTarget::HL => panic!("Illegal jump target HL for JP cc"),
+            JumpTarget::ImmSignedOffset => {
+                if self.is_cond_true(cond) {
+                    let signed_offset = self.get_imm8() as i8;
+                    let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
+                    self.registers.pc = addr;
+                    InstrInfo {
+                        length: 0,
+                        cycles: 3,
+                    }
+                } else {
+                    InstrInfo {
+                        length: 2,
+                        cycles: 2,
+                    }
+                }
+            }
+        }
     }
 
-    fn reti(&mut self) -> u16 {
-        0
+    fn call(&mut self) -> InstrInfo {
+        let new_addr = self.get_imm16();
+        let curr_addr = self.registers.pc + 3;
+        self.push_to_stack(curr_addr);
+        self.registers.pc = new_addr;
+
+        InstrInfo {
+            length: 0,
+            cycles: 6,
+        }
     }
 
-    fn ret_cond(&mut self, cond: Cond) -> u16 {
-        0
+    fn call_cond(&mut self, cond: Cond) -> InstrInfo {
+        if self.is_cond_true(cond) {
+            let new_addr = self.get_imm16();
+            let curr_addr = self.registers.pc + 3;
+            self.push_to_stack(curr_addr);
+            self.registers.pc = new_addr;
+
+            InstrInfo {
+                length: 0,
+                cycles: 6,
+            }
+        } else {
+            InstrInfo {
+                length: 3,
+                cycles: 6,
+            }
+        }
     }
 
-    fn rst(&mut self, tgt: u8) -> u16 {
-        0
+    fn ret(&mut self) -> InstrInfo {
+        let addr = self.pop_from_stack();
+        self.registers.pc = addr;
+
+        InstrInfo {
+            length: 0,
+            cycles: 4,
+        }
     }
 
-    fn pop(&mut self, reg: R16) -> u16 {
-        0
+    fn reti(&mut self) -> InstrInfo {
+        self.ime = true;
+        self.ret()
     }
 
-    fn push(&mut self, reg: R16) -> u16 {
-        0
+    fn ret_cond(&mut self, cond: Cond) -> InstrInfo {
+        if self.is_cond_true(cond) {
+            let addr = self.pop_from_stack();
+            self.registers.pc = addr;
+
+            InstrInfo {
+                length: 0,
+                cycles: 5,
+            }
+        } else {
+            InstrInfo {
+                length: 1,
+                cycles: 2,
+            }
+        }
     }
 
-    fn di(&mut self) -> u16 {
-        0
+    fn rst(&mut self, tgt: u8) -> InstrInfo {
+        let curr_addr = self.registers.pc + 1;
+        self.push_to_stack(curr_addr);
+        self.registers.pc = tgt as u16;
+
+        InstrInfo {
+            length: 0,
+            cycles: 4,
+        }
     }
 
-    fn ei(&mut self) -> u16 {
-        0
+    fn pop(&mut self, reg: R16) -> InstrInfo {
+        let stack_val = self.pop_from_stack();
+        self.set_register_pair(reg, stack_val);
+        InstrInfo {
+            length: 1,
+            cycles: 3,
+        }
+    }
+
+    fn push(&mut self, reg: R16) -> InstrInfo {
+        let reg_val = self.get_register_pair_val(reg);
+        self.push_to_stack(reg_val);
+        InstrInfo {
+            length: 1,
+            cycles: 4,
+        }
+    }
+
+    fn di(&mut self) -> InstrInfo {
+        self.ime = false; // TODO: cancel scheduled ei
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
+    }
+
+    fn ei(&mut self) -> InstrInfo {
+        self.ime = true; // TODO: delay the interrupt enable by one cycle
+        InstrInfo {
+            length: 1,
+            cycles: 1,
+        }
     }
 }

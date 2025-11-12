@@ -63,11 +63,27 @@ impl Registers {
 
     pub fn set_flags(&mut self, flags: Flags) {
         self.f = FlagsRegister {
-            zero: flags.zero,
-            subtract: flags.subtract,
-            half_carry: flags.half_carry,
-            carry: flags.carry,
+            zero: flags.zero.unwrap_or(self.f.zero),
+            subtract: flags.subtract.unwrap_or(self.f.subtract),
+            half_carry: flags.half_carry.unwrap_or(self.f.half_carry),
+            carry: flags.carry.unwrap_or(self.f.carry),
         }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.f.zero
+    }
+
+    pub fn is_subtract(&self) -> bool {
+        self.f.subtract
+    }
+
+    pub fn is_half_carry(&self) -> bool {
+        self.f.half_carry
+    }
+
+    pub fn is_carry(&self) -> bool {
+        self.f.carry
     }
 }
 

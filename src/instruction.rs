@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum R8 {
     A,
     B,
@@ -10,7 +10,7 @@ pub enum R8 {
     IndirectHL,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum Addr {
     RegisterPair(R16),
     Imm16,
@@ -18,7 +18,7 @@ pub enum Addr {
     CWithIo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum R16 {
     BC,
     DE,
@@ -29,7 +29,7 @@ pub enum R16 {
     HLD,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Cond {
     NZ,
     Z,
@@ -39,7 +39,7 @@ pub enum Cond {
 
 pub type BitIndex = u8;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum Dest {
     Register(R8),
     RegisterPair(R16),
@@ -47,7 +47,7 @@ pub enum Dest {
     A,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum Source {
     Register(R8),
     RegisterPair(R16),
@@ -58,7 +58,7 @@ pub enum Source {
     SPWithImmSignedOffset,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Operand {
     Register(R8),
     RegisterPair(R16),
@@ -67,7 +67,7 @@ pub enum Operand {
     A,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum JumpTarget {
     HL,
     Imm16,
@@ -76,7 +76,7 @@ pub enum JumpTarget {
 
 pub type Vec = u8;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Instruction {
     LD(Dest, Source),
     LDH(Dest, Source),
@@ -108,8 +108,8 @@ pub enum Instruction {
     SRA(Operand),
     SRL(Operand),
     SWAP(Operand),
-    CALL(JumpTarget),
-    CALLCOND(Cond, JumpTarget),
+    CALL,
+    CALLCOND(Cond),
     JP(JumpTarget),
     JPCOND(Cond, JumpTarget),
     JR(JumpTarget),
@@ -232,11 +232,9 @@ impl Instruction {
                 JRCOND(get_cond(byte >> 3 & 0x03), JumpTarget::ImmSignedOffset)
             }
             // CALL imm16
-            0o315 => CALL(JumpTarget::Imm16),
+            0o315 => CALL,
             // CALL cond imm16
-            0o304 | 0o314 | 0o324 | 0o334 => {
-                CALLCOND(get_cond(byte >> 3 & 0x03), JumpTarget::Imm16)
-            }
+            0o304 | 0o314 | 0o324 | 0o334 => CALLCOND(get_cond(byte >> 3 & 0x03)),
             // RET
             0o311 => RET,
             // RETI
