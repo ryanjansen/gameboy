@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum R8 {
     A,
     B,
@@ -10,16 +10,15 @@ pub enum R8 {
     IndirectHL,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Addr {
-    HL,
     RegisterPair(R16),
-    Imm8,
     Imm16,
-    C,
+    Imm8WithIo,
+    CWithIo,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum R16 {
     BC,
     DE,
@@ -39,11 +38,8 @@ pub enum Cond {
 }
 
 pub type BitIndex = u8;
-pub type Imm8 = u8;
-pub type Imm16 = u16;
-pub type ImmSignedOffset = i8;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Dest {
     Register(R8),
     RegisterPair(R16),
@@ -51,7 +47,7 @@ pub enum Dest {
     A,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Source {
     Register(R8),
     RegisterPair(R16),
@@ -183,13 +179,13 @@ impl Instruction {
             // LD SP, HL
             0o371 => LD(Dest::RegisterPair(R16::SP), Source::RegisterPair(R16::HL)),
             // LDH [imm8], A
-            0o340 => LDH(Dest::Indirect(Addr::Imm8), Source::A),
+            0o340 => LDH(Dest::Indirect(Addr::Imm8WithIo), Source::A),
             // LDH A, [imm8]
-            0o360 => LDH(Dest::A, Source::Indirect(Addr::Imm8)),
+            0o360 => LDH(Dest::A, Source::Indirect(Addr::Imm8WithIo)),
             // LDH [C], A
-            0o342 => LDH(Dest::Indirect(Addr::C), Source::A),
+            0o342 => LDH(Dest::Indirect(Addr::CWithIo), Source::A),
             // LDH A, [C]
-            0o362 => LDH(Dest::A, Source::Indirect(Addr::C)),
+            0o362 => LDH(Dest::A, Source::Indirect(Addr::CWithIo)),
             // ADD, ADC, SUB, SBC, AND, XOR, OR, CP  A, r8
             0o200..=0o277 => get_alu_reg_instr(byte >> 3 & 0x07, byte & 0x07),
             // ADD, ADC, SUB, SBC, AND, XOR, OR, CP  A, imm8

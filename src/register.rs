@@ -1,3 +1,5 @@
+use crate::cpu::Flags;
+
 #[derive(Debug)]
 pub struct Registers {
     pub a: u8,
@@ -28,11 +30,11 @@ impl Registers {
         }
     }
 
-    fn get_bc(&self) -> u16 {
+    pub fn get_bc(&self) -> u16 {
         (self.b as u16) << 8 | self.c as u16
     }
 
-    fn set_bc(&mut self, value: u16) {
+    pub fn set_bc(&mut self, value: u16) {
         self.b = ((value & 0xFF00) >> 8) as u8;
         self.c = (value & 0xFF) as u8;
     }
@@ -57,6 +59,15 @@ impl Registers {
     pub fn set_de(&mut self, value: u16) {
         self.d = ((value & 0xFF00) >> 8) as u8;
         self.e = (value & 0xFF) as u8
+    }
+
+    pub fn set_flags(&mut self, flags: Flags) {
+        self.f = FlagsRegister {
+            zero: flags.zero,
+            subtract: flags.subtract,
+            half_carry: flags.half_carry,
+            carry: flags.carry,
+        }
     }
 }
 
