@@ -125,7 +125,9 @@ impl CPU {
             RES(bit_index, operand) => self.res(bit_index, operand),
             SET(bit_index, operand) => self.set(bit_index, operand),
             JP(tgt) => self.jump(tgt),
-            JPCOND(cond, tgt) => self.jump_cond(cond, tgt),
+            JPCOND(cond) => self.jump_cond(cond),
+            JR => self.jump_relative(),
+            JRCOND(cond) => self.jump_relative_cond(cond),
             CALL => self.call(),
             CALLCOND(cond) => self.call_cond(cond),
             RET => self.ret(),
@@ -137,7 +139,6 @@ impl CPU {
             DI => self.di(),
             EI => self.ei(),
             INVALID => panic!("Invalid instruction: {:?}", instruction),
-            _ => todo!("Add catchall"),
         }
     }
 
@@ -148,9 +149,9 @@ impl CPU {
     }
 
     fn get_imm16(&self) -> u16 {
-        let lower = self.memory.read_byte(self.registers.pc + 1);
-        let upper = self.memory.read_byte(self.registers.pc + 2);
-        (upper << 8 | lower) as u16
+        let lower = self.memory.read_byte(self.registers.pc + 1) as u16;
+        let upper = self.memory.read_byte(self.registers.pc + 2) as u16;
+        upper << 8 | lower
     }
 
     fn get_register_val(&self, reg: R8) -> u8 {
@@ -854,7 +855,7 @@ impl CPU {
             zero: Some(false),
             subtract: Some(false),
             half_carry: Some(false),
-            carry: Some((a_val >> 8) == 0x1),
+            carry: Some((a_val >> 7) == 1),
         });
         InstrInfo {
             length: 1,
@@ -870,7 +871,7 @@ impl CPU {
             zero: Some(false),
             subtract: Some(false),
             half_carry: Some(false),
-            carry: Some((a_val & 0x1) == 0x1),
+            carry: Some((a_val & 1) == 1),
         });
         InstrInfo {
             length: 1,
@@ -886,7 +887,7 @@ impl CPU {
             zero: Some(false),
             subtract: Some(false),
             half_carry: Some(false),
-            carry: Some((a_val >> 8) == 0x1),
+            carry: Some((a_val >> 7) == 1),
         });
         InstrInfo {
             length: 1,
@@ -902,7 +903,7 @@ impl CPU {
             zero: Some(false),
             subtract: Some(false),
             half_carry: Some(false),
-            carry: Some((a_val & 0x1) == 0x1),
+            carry: Some((a_val & 1) == 1),
         });
         InstrInfo {
             length: 1,
@@ -1006,7 +1007,7 @@ impl CPU {
                     zero: Some(rotated_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val >> 8) == 0x1),
+                    carry: Some((reg_val >> 7) == 1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1025,7 +1026,7 @@ impl CPU {
                     zero: Some(rotated_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val & 0x1) == 0x1),
+                    carry: Some((reg_val & 11) == 0x1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1044,7 +1045,7 @@ impl CPU {
                     zero: Some(rotated_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val >> 8) == 0x1),
+                    carry: Some((reg_val >> 7) == 1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1064,7 +1065,7 @@ impl CPU {
                     zero: Some(rotated_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val & 0x1) == 0x1),
+                    carry: Some((reg_val & 11) == 0x1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1084,7 +1085,7 @@ impl CPU {
                     zero: Some(shifted_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val >> 8) == 0x1),
+                    carry: Some((reg_val >> 7) == 1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1104,7 +1105,7 @@ impl CPU {
                     zero: Some(shifted_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val & 0x1) == 0x1),
+                    carry: Some((reg_val & 11) == 0x1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1217,51 +1218,48 @@ impl CPU {
                     cycles: 1,
                 }
             }
-            JumpTarget::ImmSignedOffset => {
-                let signed_offset = self.get_imm8() as i8;
-                let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
-                self.registers.pc = addr;
-                InstrInfo {
-                    length: 0,
-                    cycles: 3,
-                }
+        }
+    }
+
+    fn jump_cond(&mut self, cond: Cond) -> InstrInfo {
+        if self.is_cond_true(cond) {
+            let addr = self.get_imm16();
+            self.registers.pc = addr;
+            InstrInfo {
+                length: 0, // To prevent moving PC after jump, actual is 3
+                cycles: 4,
+            }
+        } else {
+            InstrInfo {
+                length: 3,
+                cycles: 3,
             }
         }
     }
 
-    fn jump_cond(&mut self, cond: Cond, tgt: JumpTarget) -> InstrInfo {
-        match tgt {
-            JumpTarget::Imm16 => {
-                if self.is_cond_true(cond) {
-                    let addr = self.get_imm16();
-                    self.registers.pc = addr;
-                    InstrInfo {
-                        length: 0, // To prevent moving PC after jump, actual is 3
-                        cycles: 4,
-                    }
-                } else {
-                    InstrInfo {
-                        length: 3,
-                        cycles: 3,
-                    }
-                }
+    fn jump_relative(&mut self) -> InstrInfo {
+        let signed_offset = self.get_imm8() as i8;
+        let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
+        self.registers.pc = addr;
+        InstrInfo {
+            length: 0,
+            cycles: 3,
+        }
+    }
+
+    fn jump_relative_cond(&mut self, cond: Cond) -> InstrInfo {
+        if self.is_cond_true(cond) {
+            let signed_offset = self.get_imm8() as i8;
+            let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
+            self.registers.pc = addr;
+            InstrInfo {
+                length: 0,
+                cycles: 3,
             }
-            JumpTarget::HL => panic!("Illegal jump target HL for JP cc"),
-            JumpTarget::ImmSignedOffset => {
-                if self.is_cond_true(cond) {
-                    let signed_offset = self.get_imm8() as i8;
-                    let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
-                    self.registers.pc = addr;
-                    InstrInfo {
-                        length: 0,
-                        cycles: 3,
-                    }
-                } else {
-                    InstrInfo {
-                        length: 2,
-                        cycles: 2,
-                    }
-                }
+        } else {
+            InstrInfo {
+                length: 2,
+                cycles: 2,
             }
         }
     }

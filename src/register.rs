@@ -7,7 +7,7 @@ pub struct Registers {
     pub c: u8,
     pub d: u8,
     pub e: u8,
-    pub f: FlagsRegister,
+    f: FlagsRegister,
     pub h: u8,
     pub l: u8,
     pub pc: u16,

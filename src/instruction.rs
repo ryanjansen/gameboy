@@ -1,82 +1,6 @@
-#[derive(Debug, Copy, Clone)]
-pub enum R8 {
-    A,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-    IndirectHL,
-}
+use std::fmt;
 
-#[derive(Debug, Copy, Clone)]
-pub enum Addr {
-    RegisterPair(R16),
-    Imm16,
-    Imm8WithIo,
-    CWithIo,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum R16 {
-    BC,
-    DE,
-    HL,
-    SP,
-    AF,
-    HLI,
-    HLD,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Cond {
-    NZ,
-    Z,
-    NC,
-    C,
-}
-
-pub type BitIndex = u8;
-
-#[derive(Debug, Copy, Clone)]
-pub enum Dest {
-    Register(R8),
-    RegisterPair(R16),
-    Indirect(Addr),
-    A,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Source {
-    Register(R8),
-    RegisterPair(R16),
-    Imm8,
-    Imm16,
-    Indirect(Addr),
-    A,
-    SPWithImmSignedOffset,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Operand {
-    Register(R8),
-    RegisterPair(R16),
-    Imm8,
-    ImmSignedOffset,
-    A,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum JumpTarget {
-    HL,
-    Imm16,
-    ImmSignedOffset,
-}
-
-pub type Vec = u8;
-
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub enum Instruction {
     LD(Dest, Source),
     LDH(Dest, Source),
@@ -111,9 +35,9 @@ pub enum Instruction {
     CALL,
     CALLCOND(Cond),
     JP(JumpTarget),
-    JPCOND(Cond, JumpTarget),
-    JR(JumpTarget),
-    JRCOND(Cond, JumpTarget),
+    JPCOND(Cond),
+    JR,
+    JRCOND(Cond),
     RET,
     RETCOND(Cond),
     RETI,
@@ -224,13 +148,11 @@ impl Instruction {
             // JP HL
             0o351 => JP(JumpTarget::HL),
             // JP cond imm16
-            0o302 | 0o312 | 0o322 | 0o332 => JPCOND(get_cond(byte >> 3 & 0x03), JumpTarget::Imm16),
+            0o302 | 0o312 | 0o322 | 0o332 => JPCOND(get_cond(byte >> 3 & 0x03)),
             // JR e8
-            0o030 => JR(JumpTarget::ImmSignedOffset),
+            0o030 => JR,
             // JR cond e8
-            0o040 | 0o050 | 0o060 | 0o070 => {
-                JRCOND(get_cond(byte >> 3 & 0x03), JumpTarget::ImmSignedOffset)
-            }
+            0o040 | 0o050 | 0o060 | 0o070 => JRCOND(get_cond(byte >> 3 & 0x03)),
             // CALL imm16
             0o315 => CALL,
             // CALL cond imm16
@@ -279,6 +201,64 @@ impl Instruction {
                 byte >> 3 & 0x07,
                 Operand::Register(get_register(byte & 0x07)),
             ),
+        }
+    }
+}
+
+impl fmt::Debug for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Instruction::*;
+
+        match self {
+            LD(dest, src) => write!(f, "LD {:?} {:?}", dest, src),
+            LDH(dest, src) => write!(f, "LDH {:?} {:?}", dest, src),
+            ADC(op) => write!(f, "ADC {:?}", op),
+            ADD(dest, op) => write!(f, "ADD {:?} {:?}", dest, op),
+            CP(op) => write!(f, "CP {:?}", op),
+            DEC(op) => write!(f, "DEC {:?} ", op),
+            INC(op) => write!(f, "INC {:?} ", op),
+            SBC(op) => write!(f, "SBC {:?} ", op),
+            SUB(op) => write!(f, "SUB {:?} ", op),
+            AND(op) => write!(f, "AND {:?} ", op),
+            OR(op) => write!(f, "OR {:?} ", op),
+            XOR(op) => write!(f, "XOR {:?} ", op),
+            BIT(bit_index, op) => write!(f, "BIT {:?} {:?}", bit_index, op),
+            RES(bit_index, op) => write!(f, "RES {:?} {:?}", bit_index, op),
+            SET(bit_index, op) => write!(f, "SET {:?} {:?}", bit_index, op),
+            RLCA => write!(f, "RLCA"),
+            RRCA => write!(f, "RRCA"),
+            RLA => write!(f, "RLA"),
+            RRA => write!(f, "RRA"),
+            CPL => write!(f, "CPL"),
+            SCF => write!(f, "SCF"),
+            CCF => write!(f, "CCP"),
+            RL(op) => write!(f, "RL {:?}", op),
+            RLC(op) => write!(f, "RLC {:?} ", op),
+            RR(op) => write!(f, "RR {:?} ", op),
+            RRC(op) => write!(f, "RRC {:?} ", op),
+            SLA(op) => write!(f, "SLA {:?} ", op),
+            SRA(op) => write!(f, "SRA {:?} ", op),
+            SRL(op) => write!(f, "SRL {:?} ", op),
+            SWAP(op) => write!(f, "SWAP {:?} ", op),
+            CALL => write!(f, "CALL"),
+            CALLCOND(cond) => write!(f, "CALL {:?}", cond),
+            JP(tgt) => write!(f, "JP {:?}", tgt),
+            JPCOND(cond) => write!(f, "JP {:?} imm16", cond),
+            JR => write!(f, "JR e8"),
+            JRCOND(cond) => write!(f, "JR {:?} e8", cond),
+            RET => write!(f, "RET"),
+            RETCOND(cond) => write!(f, "RET {:?}", cond),
+            RETI => write!(f, "RETI "),
+            RST(vec) => write!(f, "RST {:X}", vec),
+            POP(reg_pair) => write!(f, "POP {:?}", reg_pair),
+            PUSH(reg_pair) => write!(f, "PUSH {:?}", reg_pair),
+            DI => write!(f, "DI"),
+            EI => write!(f, "EI"),
+            HALT => write!(f, "HALT"),
+            DAA => write!(f, "DAA"),
+            NOP => write!(f, "NOP"),
+            STOP => write!(f, "STOP"),
+            INVALID => write!(f, "INVALID"),
         }
     }
 }
@@ -394,3 +374,79 @@ fn get_flag_instr(instr_index: u8) -> Instruction {
         _ => unreachable!("Invalid index for flag instruction"),
     }
 }
+
+#[derive(Debug, Copy, Clone)]
+pub enum R8 {
+    A,
+    B,
+    C,
+    D,
+    E,
+    H,
+    L,
+    IndirectHL,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Addr {
+    RegisterPair(R16),
+    Imm16,
+    Imm8WithIo,
+    CWithIo,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum R16 {
+    BC,
+    DE,
+    HL,
+    SP,
+    AF,
+    HLI,
+    HLD,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Cond {
+    NZ,
+    Z,
+    NC,
+    C,
+}
+
+pub type BitIndex = u8;
+
+#[derive(Debug, Copy, Clone)]
+pub enum Dest {
+    Register(R8),
+    RegisterPair(R16),
+    Indirect(Addr),
+    A,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Source {
+    Register(R8),
+    RegisterPair(R16),
+    Imm8,
+    Imm16,
+    Indirect(Addr),
+    A,
+    SPWithImmSignedOffset,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Operand {
+    Register(R8),
+    RegisterPair(R16),
+    Imm8,
+    ImmSignedOffset,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum JumpTarget {
+    HL,
+    Imm16,
+}
+
+pub type Vec = u8;
