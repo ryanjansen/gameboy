@@ -86,7 +86,7 @@ impl Instruction {
                 Source::Indirect(Addr::RegisterPair(get_register_pair_mem(byte >> 4 & 0x03))),
             ),
             // LD r8, imm8
-            0o016 | 0o026 | 0o036 | 0o046 | 0o056 | 0o066 | 0o076 => {
+            0o006 | 0o016 | 0o026 | 0o036 | 0o046 | 0o056 | 0o066 | 0o076 => {
                 LD(Dest::Register(get_register(byte >> 3 & 0x07)), Source::Imm8)
             }
             // LD r8, r8
@@ -375,7 +375,7 @@ fn get_flag_instr(instr_index: u8) -> Instruction {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub enum R8 {
     A,
     B,
@@ -387,12 +387,40 @@ pub enum R8 {
     IndirectHL,
 }
 
-#[derive(Debug, Copy, Clone)]
+impl fmt::Debug for R8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use R8::*;
+        match self {
+            A => write!(f, "A"),
+            B => write!(f, "B"),
+            C => write!(f, "C"),
+            D => write!(f, "D"),
+            E => write!(f, "E"),
+            H => write!(f, "H"),
+            L => write!(f, "L"),
+            IndirectHL => write!(f, "[HL]"),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
 pub enum Addr {
     RegisterPair(R16),
     Imm16,
     Imm8WithIo,
     CWithIo,
+}
+
+impl fmt::Debug for Addr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Addr::*;
+        match self {
+            RegisterPair(reg) => write!(f, "{:?}", reg),
+            Imm16 => write!(f, "imm16"),
+            Imm8WithIo => write!(f, "imm16 + 0xFF00"),
+            CWithIo => write!(f, "C + 0xFF00"),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -416,7 +444,7 @@ pub enum Cond {
 
 pub type BitIndex = u8;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub enum Dest {
     Register(R8),
     RegisterPair(R16),
@@ -424,7 +452,19 @@ pub enum Dest {
     A,
 }
 
-#[derive(Debug, Copy, Clone)]
+impl fmt::Debug for Dest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Dest::*;
+        match self {
+            Register(reg) => write!(f, "{:?}", reg),
+            RegisterPair(reg) => write!(f, "{:?}", reg),
+            Indirect(addr) => write!(f, "[{:?}]", addr),
+            A => write!(f, "A"),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
 pub enum Source {
     Register(R8),
     RegisterPair(R16),
@@ -435,12 +475,39 @@ pub enum Source {
     SPWithImmSignedOffset,
 }
 
-#[derive(Debug, Copy, Clone)]
+impl fmt::Debug for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Source::*;
+        match self {
+            Register(reg) => write!(f, "{:?}", reg),
+            RegisterPair(reg) => write!(f, "{:?}", reg),
+            Imm8 => write!(f, "imm8"),
+            Imm16 => write!(f, "imm16"),
+            Indirect(addr) => write!(f, "[{:?}]", addr),
+            A => write!(f, "A"),
+            SPWithImmSignedOffset => write!(f, "SP + e8"),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
 pub enum Operand {
     Register(R8),
     RegisterPair(R16),
     Imm8,
     ImmSignedOffset,
+}
+
+impl fmt::Debug for Operand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Operand::*;
+        match self {
+            Register(reg) => write!(f, "{:?}", reg),
+            RegisterPair(reg) => write!(f, "{:?}", reg),
+            Imm8 => write!(f, "imm8"),
+            ImmSignedOffset => write!(f, "e8"),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]

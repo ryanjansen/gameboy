@@ -64,18 +64,42 @@ impl CPU {
         }
     }
 
-    fn step(&mut self) {
+    pub fn disassemble(&mut self) {
+        for _ in 0..100000 {
+            let instruction = self.get_instr();
+
+            println!("{:?}", self);
+            println!("Instruction: {:?}", instruction);
+
+            let InstrInfo {
+                length: instr_length,
+                cycles: _instr_cycles,
+            } = self.execute(instruction);
+            self.registers.pc += instr_length;
+        }
+    }
+
+    fn get_instr(&self) -> Instruction {
         let mut instruction_byte = self.memory.read_byte(self.registers.pc);
         let prefixed = instruction_byte == 0xCB;
         if prefixed {
             instruction_byte = self.memory.read_byte(self.registers.pc + 1);
         }
 
-        let instruction = Instruction::decode(instruction_byte, prefixed);
+        println!();
+        println!("Instr Byte: {:X}", instruction_byte);
+
+        Instruction::decode(instruction_byte, prefixed)
+    }
+
+    fn step(&mut self) {
+        let instruction = self.get_instr();
+
         let InstrInfo {
             length: instr_length,
             cycles: _instr_cycles,
         } = self.execute(instruction);
+
         self.registers.pc += instr_length;
         // self.gpu.step(instr_cycles);
     }
@@ -795,7 +819,7 @@ impl CPU {
         match operand {
             Operand::RegisterPair(reg) => {
                 let reg_val = self.get_register_pair_val(reg);
-                let result = reg_val + 1;
+                let result = reg_val.wrapping_add(1);
                 self.set_register_pair(reg, result);
                 InstrInfo {
                     length: 1,
@@ -812,7 +836,7 @@ impl CPU {
                     half_carry: Some(CPU::is_bit3_overflow(reg_val, 1)),
                     carry: None,
                 });
-                self.set_register(R8::A, result);
+                self.set_register(reg, result);
                 InstrInfo { length: 1, cycles }
             }
             _ => unreachable!("Illegal operand for INC"),
@@ -834,13 +858,14 @@ impl CPU {
                 let cycles = if matches!(reg, R8::IndirectHL) { 3 } else { 1 };
                 let reg_val = self.get_register_val(reg);
                 let result = reg_val.wrapping_sub(1);
+                println!("DEC RESULT: {}", result);
                 self.set_flags(Flags {
                     zero: Some(result == 0),
                     subtract: Some(true),
                     half_carry: Some(CPU::is_bit4_borrowed(reg_val, 1)),
                     carry: None,
                 });
-                self.set_register(R8::A, result);
+                self.set_register(reg, result);
                 InstrInfo { length: 1, cycles }
             }
             _ => unreachable!("Illegal operand for DEC"),
@@ -1240,7 +1265,7 @@ impl CPU {
     fn jump_relative(&mut self) -> InstrInfo {
         let signed_offset = self.get_imm8() as i8;
         let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
-        self.registers.pc = addr;
+        self.registers.pc = addr + 2; // Jump from PC addr after this instruction (2 bytes later)
         InstrInfo {
             length: 0,
             cycles: 3,
@@ -1250,8 +1275,13 @@ impl CPU {
     fn jump_relative_cond(&mut self, cond: Cond) -> InstrInfo {
         if self.is_cond_true(cond) {
             let signed_offset = self.get_imm8() as i8;
+            println!(
+                "e8: {} {:X} {:b}",
+                signed_offset, signed_offset, signed_offset
+            );
             let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
-            self.registers.pc = addr;
+            println!("ADDR: {} {:X} {:b}", addr, addr, addr);
+            self.registers.pc = addr + 2; // Jump from PC addr after this instruction (2 bytes later)
             InstrInfo {
                 length: 0,
                 cycles: 3,
