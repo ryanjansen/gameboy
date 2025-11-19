@@ -42,11 +42,33 @@ pub struct Flags {
     pub carry: Option<bool>,
 }
 
-#[derive(Debug)]
 pub struct CPU {
     registers: Registers,
     memory: Memory,
     ime: bool,
+}
+
+impl fmt::Debug for CPU {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}",
+            self.registers.a,
+            self.registers.get_f_as_u8(),
+            self.registers.b,
+            self.registers.c,
+            self.registers.d,
+            self.registers.e,
+            self.registers.h,
+            self.registers.l,
+            self.registers.sp,
+            self.registers.pc,
+            self.memory.read_byte(self.registers.pc),
+            self.memory.read_byte(self.registers.pc + 1),
+            self.memory.read_byte(self.registers.pc + 2),
+            self.memory.read_byte(self.registers.pc + 3),
+        )
+    }
 }
 
 impl CPU {
@@ -69,7 +91,6 @@ impl CPU {
             let instruction = self.get_instr();
 
             println!("{:?}", self);
-            println!("Instruction: {:?}", instruction);
 
             let InstrInfo {
                 length: instr_length,
@@ -85,10 +106,6 @@ impl CPU {
         if prefixed {
             instruction_byte = self.memory.read_byte(self.registers.pc + 1);
         }
-
-        println!();
-        println!("Instr Byte: {:X}", instruction_byte);
-
         Instruction::decode(instruction_byte, prefixed)
     }
 
@@ -858,7 +875,6 @@ impl CPU {
                 let cycles = if matches!(reg, R8::IndirectHL) { 3 } else { 1 };
                 let reg_val = self.get_register_val(reg);
                 let result = reg_val.wrapping_sub(1);
-                println!("DEC RESULT: {}", result);
                 self.set_flags(Flags {
                     zero: Some(result == 0),
                     subtract: Some(true),
@@ -1275,12 +1291,7 @@ impl CPU {
     fn jump_relative_cond(&mut self, cond: Cond) -> InstrInfo {
         if self.is_cond_true(cond) {
             let signed_offset = self.get_imm8() as i8;
-            println!(
-                "e8: {} {:X} {:b}",
-                signed_offset, signed_offset, signed_offset
-            );
             let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
-            println!("ADDR: {} {:X} {:b}", addr, addr, addr);
             self.registers.pc = addr + 2; // Jump from PC addr after this instruction (2 bytes later)
             InstrInfo {
                 length: 0,
