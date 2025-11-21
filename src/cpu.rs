@@ -27,10 +27,17 @@ impl Memory {
     }
 
     fn read_byte(&self, address: u16) -> u8 {
+        if address == 0xFF44 {
+            return 0x90;
+        }
+
         self.memory[address as usize]
     }
 
     fn write_byte(&mut self, address: u16, val: u8) {
+        // if address == 0xFF83 {
+        //     println!("WRITING {:} to FF83", val);
+        // }
         self.memory[address as usize] = val
     }
 }
@@ -86,16 +93,18 @@ impl CPU {
         }
     }
 
-    pub fn disassemble(&mut self) {
+    pub fn run_and_log_state(&mut self) {
         for _ in 0..100000 {
             let instruction = self.get_instr();
 
             println!("{:?}", self);
+            // println!("{:?}", instruction);
 
             let InstrInfo {
                 length: instr_length,
                 cycles: _instr_cycles,
             } = self.execute(instruction);
+
             self.registers.pc += instr_length;
         }
     }
@@ -236,12 +245,12 @@ impl CPU {
             AF => self.registers.get_af(),
             HLI => {
                 let val = self.registers.get_hl();
-                self.registers.set_hl(val + 1);
+                self.registers.set_hl(val.wrapping_add(1));
                 val
             }
             HLD => {
                 let val = self.registers.get_hl();
-                self.registers.set_hl(val - 1);
+                self.registers.set_hl(val.wrapping_sub(1));
                 val
             }
         }
@@ -255,12 +264,12 @@ impl CPU {
             DE => self.registers.set_de(val),
             HL => self.registers.set_hl(val),
             SP => self.registers.sp = val,
-            AF => panic!("Not allowed to set register AF directly"),
+            AF => self.registers.set_af(val),
             HLI => {
-                self.registers.set_hl(val + 1);
+                self.registers.set_hl(val.wrapping_add(1));
             }
             HLD => {
-                self.registers.set_hl(val - 1);
+                self.registers.set_hl(val.wrapping_sub(1));
             }
         }
     }
@@ -403,8 +412,8 @@ impl CPU {
     }
 
     fn push_to_stack(&mut self, val: u16) {
-        let lower = (val & 0xF) as u8;
-        let upper = (val >> 4) as u8;
+        let lower = (val & 0x00FF) as u8;
+        let upper = (val >> 8) as u8;
         self.registers.sp -= 1;
         self.memory.write_byte(self.registers.sp, upper);
         self.registers.sp -= 1;
@@ -415,6 +424,7 @@ impl CPU {
         let lower = self.memory.read_byte(self.registers.sp) as u16;
         self.registers.sp += 1;
         let upper = self.memory.read_byte(self.registers.sp) as u16;
+        self.registers.sp += 1;
         (upper << 8) | lower
     }
 
@@ -423,7 +433,7 @@ impl CPU {
     fn load(&mut self, dest: Dest, src: Source) -> InstrInfo {
         // dest: [imm16], r16, r8, [r16mem], A, HL, SP
         // src: imm8, imm16, r8, SP, SP + e8, A, [r16mem],
-        //
+
         let invalid_error_msg = format!("Invalid load instruction LD {:?} {:?}", &dest, &src);
 
         match (dest, src) {
@@ -491,8 +501,8 @@ impl CPU {
                 let src_val = self.get_register_val(R8::A);
                 self.set_indirect(Addr::Imm16, src_val);
                 InstrInfo {
-                    length: 2,
-                    cycles: 3,
+                    length: 3,
+                    cycles: 4,
                 }
             }
             // LD A, [imm16]
@@ -500,8 +510,8 @@ impl CPU {
                 let src_val = self.get_indirect_val(Addr::Imm16);
                 self.set_register(R8::A, src_val);
                 InstrInfo {
-                    length: 2,
-                    cycles: 3,
+                    length: 3,
+                    cycles: 4,
                 }
             }
             // LD HL, SP + e8
@@ -653,7 +663,7 @@ impl CPU {
             Operand::Imm8 => {
                 let imm_val = self.get_imm8();
                 let a_val = self.get_register_val(R8::A);
-                let (diff, flags) = CPU::sub_u8(imm_val, a_val);
+                let (diff, flags) = CPU::sub_u8(a_val, imm_val);
                 self.set_flags(flags);
                 self.set_register(R8::A, diff);
                 InstrInfo {
@@ -665,7 +675,7 @@ impl CPU {
                 let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
                 let reg_val = self.get_register_val(reg);
                 let a_val = self.get_register_val(R8::A);
-                let (diff, flags) = CPU::sub_u8(reg_val, a_val);
+                let (diff, flags) = CPU::sub_u8(a_val, reg_val);
                 self.set_flags(flags);
                 self.set_register(R8::A, diff);
                 InstrInfo { length: 1, cycles }
@@ -922,7 +932,7 @@ impl CPU {
 
     fn rla(&mut self) -> InstrInfo {
         let a_val = self.get_register_val(R8::A);
-        let rotated_val = a_val.rotate_left(1) & (self.registers.is_carry() as u8);
+        let rotated_val = a_val << 1 | (self.registers.is_carry() as u8);
         self.set_register(R8::A, rotated_val);
         self.set_flags(Flags {
             zero: Some(false),
@@ -938,7 +948,7 @@ impl CPU {
 
     fn rra(&mut self) -> InstrInfo {
         let a_val = self.get_register_val(R8::A);
-        let rotated_val = a_val.rotate_right(1) & (self.registers.is_carry() as u8);
+        let rotated_val = a_val >> 1 | ((self.registers.is_carry() as u8) << 7);
         self.set_register(R8::A, rotated_val);
         self.set_flags(Flags {
             zero: Some(false),
@@ -1067,7 +1077,7 @@ impl CPU {
                     zero: Some(rotated_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val & 11) == 0x1),
+                    carry: Some((reg_val & 1) == 0x1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1080,7 +1090,7 @@ impl CPU {
             Operand::Register(reg) => {
                 let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
                 let reg_val = self.get_register_val(reg);
-                let rotated_val = reg_val.rotate_left(1) & (self.registers.is_carry() as u8);
+                let rotated_val = reg_val << 1 | (self.registers.is_carry() as u8);
                 self.set_register(reg, rotated_val);
                 self.set_flags(Flags {
                     zero: Some(rotated_val == 0),
@@ -1100,13 +1110,13 @@ impl CPU {
             Operand::Register(reg) => {
                 let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
                 let reg_val = self.get_register_val(reg);
-                let rotated_val = reg_val.rotate_right(1) & (self.registers.is_carry() as u8);
+                let rotated_val = reg_val >> 1 | ((self.registers.is_carry() as u8) << 7);
                 self.set_register(reg, rotated_val);
                 self.set_flags(Flags {
                     zero: Some(rotated_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val & 11) == 0x1),
+                    carry: Some((reg_val & 1) == 1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1146,7 +1156,7 @@ impl CPU {
                     zero: Some(shifted_val == 0),
                     subtract: Some(false),
                     half_carry: Some(false),
-                    carry: Some((reg_val & 11) == 0x1),
+                    carry: Some((reg_val & 1) == 1),
                 });
                 InstrInfo { length: 2, cycles }
             }
@@ -1182,7 +1192,7 @@ impl CPU {
             Operand::Register(reg) => {
                 let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
                 let reg_val = self.get_register_val(reg);
-                let shifted_val = reg_val >> 2;
+                let shifted_val = reg_val >> 1;
                 self.set_register(reg, shifted_val);
                 self.set_flags(Flags {
                     zero: Some(shifted_val == 0),

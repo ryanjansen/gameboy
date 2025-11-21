@@ -25,8 +25,8 @@ impl Registers {
             f: FlagsRegister::new(),
             h: 0x01,
             l: 0x4D,
-            pc: 0x00,
-            sp: 0x01,
+            pc: 0x0100,
+            sp: 0xFFFE,
         }
     }
 
@@ -50,6 +50,11 @@ impl Registers {
 
     pub fn get_af(&self) -> u16 {
         (self.a as u16) << 8 | u8::from(&self.f) as u16
+    }
+
+    pub fn set_af(&mut self, value: u16) {
+        self.a = ((value & 0xFF00) >> 8) as u8;
+        self.f = FlagsRegister::from((value & 0xFF) as u8);
     }
 
     pub fn get_f_as_u8(&self) -> u8 {
@@ -134,8 +139,8 @@ impl FlagsRegister {
         FlagsRegister {
             zero: true,
             subtract: false,
-            half_carry: false,
-            carry: false,
+            half_carry: true,
+            carry: true,
         }
     }
 }
