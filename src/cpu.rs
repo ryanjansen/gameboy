@@ -35,8 +35,8 @@ impl Memory {
     }
 
     fn write_byte(&mut self, address: u16, val: u8) {
-        // if address == 0xFF83 {
-        //     println!("WRITING {:} to FF83", val);
+        // if address == 0xFF80 {
+        //     println!("WRITING {:02X} to FF80", val);
         // }
         self.memory[address as usize] = val
     }
@@ -94,7 +94,7 @@ impl CPU {
     }
 
     pub fn run_and_log_state(&mut self) {
-        for _ in 0..100000 {
+        for _ in 0..300000 {
             let instruction = self.get_instr();
 
             println!("{:?}", self);
@@ -359,7 +359,8 @@ impl CPU {
     fn add_with_carry(left: u8, right: u8, is_carry: bool) -> (u8, Flags) {
         let (sum, is_overflow) = left.overflowing_add(right);
         let (final_sum, final_is_overflow) = sum.overflowing_add(is_carry as u8);
-        let is_half_carry = CPU::is_bit3_overflow(sum, is_carry as u8);
+        let is_half_carry =
+            CPU::is_bit3_overflow(left, right) || CPU::is_bit3_overflow(sum, is_carry as u8);
         (
             final_sum,
             Flags {
@@ -593,8 +594,8 @@ impl CPU {
                 self.set_flags(flags);
                 self.set_register_pair(R16::HL, sum);
                 InstrInfo {
-                    length: 3,
-                    cycles: 3,
+                    length: 1,
+                    cycles: 2,
                 }
             }
             (Dest::A, Operand::Register(reg)) => {
@@ -604,7 +605,7 @@ impl CPU {
                 let (sum, flags) = CPU::add_u8(a_val, reg_val);
                 self.set_flags(flags);
                 self.set_register(R8::A, sum);
-                InstrInfo { length: 3, cycles }
+                InstrInfo { length: 1, cycles }
             }
             (Dest::A, Operand::Imm8) => {
                 let imm_val = self.get_imm8();

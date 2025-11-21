@@ -119,7 +119,7 @@ impl Instruction {
             // ADD HL, r16
             0o011 | 0o031 | 0o051 | 0o071 => ADD(
                 Dest::RegisterPair(R16::HL),
-                Operand::RegisterPair(get_register_pair(byte & 0x07)),
+                Operand::RegisterPair(get_register_pair(byte >> 4 & 0x07)),
             ),
             // ADD SP, e8
             0o350 => ADD(Dest::RegisterPair(R16::SP), Operand::ImmSignedOffset),
