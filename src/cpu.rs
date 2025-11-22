@@ -31,14 +31,17 @@ impl Memory {
             return 0x90;
         }
 
+        if address >= 0xFFFF {
+            return 0xFF;
+        }
+
         self.memory[address as usize]
     }
 
     fn write_byte(&mut self, address: u16, val: u8) {
-        // if address == 0xFF80 {
-        //     println!("WRITING {:02X} to FF80", val);
-        // }
-        self.memory[address as usize] = val
+        if address < 0xFFFF {
+            self.memory[address as usize] = val
+        }
     }
 }
 
@@ -94,10 +97,14 @@ impl CPU {
     }
 
     pub fn run_and_log_state(&mut self) {
-        for _ in 0..300000 {
+        loop {
             let instruction = self.get_instr();
 
             println!("{:?}", self);
+
+            // if self.memory.read_byte(0xFF80) == 0xBC {
+            //     println!("FF80 set to BC")
+            // }
             // println!("{:?}", instruction);
 
             let InstrInfo {
@@ -278,12 +285,11 @@ impl CPU {
         match addr {
             Addr::RegisterPair(reg) => self.get_register_pair_val(reg),
             Addr::Imm8WithIo => {
-                let signed_offset = self.get_imm8() as i8;
-                let (sum, _) = CPU::add_u16_i8(0xFF00, signed_offset);
-                sum
+                let offset = self.get_imm8();
+                0xFF00 | offset as u16
             }
             Addr::Imm16 => self.get_imm16(),
-            Addr::CWithIo => self.get_register_val(R8::C) as u16 + 0xFF00,
+            Addr::CWithIo => 0xFF00 | self.get_register_val(R8::C) as u16,
         }
     }
 
@@ -306,7 +312,7 @@ impl CPU {
     }
 
     fn is_bit11_overflow(left: u16, right: u16) -> bool {
-        (((left & 0x0FFF) + (right & 0x0FFFF)) & 0x1000) == 0x1000
+        (((left & 0x0FFF) + (right & 0x0FFF)) & 0x1000) == 0x1000
     }
 
     fn is_bit4_borrowed(left: u8, right: u8) -> bool {
@@ -394,7 +400,7 @@ impl CPU {
             final_diff,
             Flags {
                 zero: Some(final_diff == 0),
-                subtract: Some(false),
+                subtract: Some(true),
                 half_carry: Some(
                     (left & 0x0F).wrapping_sub(right & 0x0F).wrapping_sub(carry) > 0x0F,
                 ),
@@ -690,7 +696,7 @@ impl CPU {
             Operand::Imm8 => {
                 let imm_val = self.get_imm8();
                 let a_val = self.get_register_val(R8::A);
-                let (diff, flags) = CPU::sub_with_carry(imm_val, a_val, self.registers.is_carry());
+                let (diff, flags) = CPU::sub_with_carry(a_val, imm_val, self.registers.is_carry());
                 self.set_flags(flags);
                 self.set_register(R8::A, diff);
                 InstrInfo {
@@ -702,7 +708,7 @@ impl CPU {
                 let cycles = if matches!(reg, R8::IndirectHL) { 2 } else { 1 };
                 let reg_val = self.get_register_val(reg);
                 let a_val = self.get_register_val(R8::A);
-                let (diff, flags) = CPU::sub_with_carry(reg_val, a_val, self.registers.is_carry());
+                let (diff, flags) = CPU::sub_with_carry(a_val, reg_val, self.registers.is_carry());
                 self.set_flags(flags);
                 self.set_register(R8::A, diff);
                 InstrInfo { length: 1, cycles }
@@ -978,23 +984,25 @@ impl CPU {
                 zero: flags.zero,
                 subtract: None,
                 half_carry: Some(false),
-                carry: flags.carry,
+                carry: None,
             });
             self.set_register(R8::A, diff);
         } else {
             let mut adj: u8 = 0;
+            let mut is_carry = false;
             if self.registers.is_half_carry() || a_val & 0xF > 0x9 {
                 adj += 0x6;
             }
             if self.registers.is_carry() || a_val > 0x99 {
                 adj += 0x60;
+                is_carry = true;
             }
             let (sum, flags) = CPU::add_u8(a_val, adj);
             self.set_flags(Flags {
                 zero: flags.zero,
                 subtract: None,
                 half_carry: Some(false),
-                carry: flags.carry,
+                carry: if is_carry { Some(true) } else { None },
             });
             self.set_register(R8::A, sum);
         }
@@ -1151,7 +1159,7 @@ impl CPU {
             Operand::Register(reg) => {
                 let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
                 let reg_val = self.get_register_val(reg);
-                let shifted_val = ((reg_val as i8) >> 2) as u8;
+                let shifted_val = ((reg_val as i8) >> 1) as u8;
                 self.set_register(reg, shifted_val);
                 self.set_flags(Flags {
                     zero: Some(shifted_val == 0),
@@ -1231,7 +1239,8 @@ impl CPU {
             Operand::Register(reg) => {
                 let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
                 let reg_val = self.get_register_val(reg);
-                self.set_register(reg, reg_val & (0 << bit_index));
+                let mask = !(1 << bit_index);
+                self.set_register(reg, reg_val & mask);
                 InstrInfo { length: 2, cycles }
             }
 
