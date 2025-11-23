@@ -41,7 +41,7 @@ pub enum Instruction {
     RET,
     RETCOND(Cond),
     RETI,
-    RST(Vec),
+    RST(RstTgt),
     POP(R16),
     PUSH(R16),
     DI,
@@ -516,4 +516,4 @@ pub enum JumpTarget {
     Imm16,
 }
 
-pub type Vec = u8;
+pub type RstTgt = u8;

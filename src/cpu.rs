@@ -9,8 +9,22 @@ struct InstrInfo {
     cycles: Cycles,
 }
 
+enum Interrupt {
+    VBlank,
+    LCD,
+    Timer,
+    Serial,
+    Joypad,
+}
+
+fn is_bit_set(val: u8, bit_index: u8) -> bool {
+    (val & (1 << bit_index)) != 0
+}
+
 struct Memory {
     memory: [u8; 0xFFFF],
+    interrupt_enable: u8, // FFFF
+    interrupt_flag: u8,   // FF0F
 }
 
 impl fmt::Debug for Memory {
@@ -23,24 +37,58 @@ impl fmt::Debug for Memory {
 
 impl Memory {
     fn new(rom: [u8; 0xFFFF]) -> Memory {
-        Memory { memory: rom }
+        Memory {
+            memory: rom,
+            interrupt_enable: 0,
+            interrupt_flag: 0,
+        }
     }
 
     fn read_byte(&self, address: u16) -> u8 {
         if address == 0xFF44 {
             return 0x90;
+        } else if address == 0xFF0F {
+            println!("DEBUG Reading FF0F: {:08b}", self.interrupt_flag);
+            return self.interrupt_flag;
+        } else if address == 0xFFFF {
+            return self.interrupt_enable;
+        } else {
+            self.memory[address as usize]
         }
-
-        if address >= 0xFFFF {
-            return 0xFF;
-        }
-
-        self.memory[address as usize]
     }
 
     fn write_byte(&mut self, address: u16, val: u8) {
-        if address < 0xFFFF {
+        if address == 0xFFFF {
+            println!("DEBUG: Writing to ffff {:08b}", val);
+            self.interrupt_enable = val;
+        } else if address == 0xFF0F {
+            println!("DEBUG Writing to ff0f {:08b}", val);
+            self.interrupt_flag = val;
+        } else if address < 0xFFFF {
             self.memory[address as usize] = val
+        } else {
+            panic!("Invalid memory address {:04X}", address)
+        }
+    }
+
+    fn get_enabled_interrupt(&mut self) -> Option<Interrupt> {
+        if is_bit_set(self.interrupt_enable, 0) && is_bit_set(self.interrupt_flag, 0) {
+            self.interrupt_flag &= 0b11111110;
+            Some(Interrupt::VBlank)
+        } else if is_bit_set(self.interrupt_enable, 1) && is_bit_set(self.interrupt_flag, 1) {
+            self.interrupt_flag &= 0b11111101;
+            Some(Interrupt::LCD)
+        } else if is_bit_set(self.interrupt_enable, 2) && is_bit_set(self.interrupt_flag, 2) {
+            self.interrupt_flag &= 0b11111011;
+            Some(Interrupt::Timer)
+        } else if is_bit_set(self.interrupt_enable, 3) && is_bit_set(self.interrupt_flag, 3) {
+            self.interrupt_flag &= 0b11110111;
+            Some(Interrupt::Serial)
+        } else if is_bit_set(self.interrupt_enable, 4) && is_bit_set(self.interrupt_flag, 4) {
+            self.interrupt_flag &= 0b11101111;
+            Some(Interrupt::Joypad)
+        } else {
+            None
         }
     }
 }
@@ -52,10 +100,84 @@ pub struct Flags {
     pub carry: Option<bool>,
 }
 
+struct IME {
+    is_set: bool,
+    is_scheduled: bool,
+}
+
+impl IME {
+    pub fn new() -> IME {
+        IME {
+            is_set: false,
+            is_scheduled: false,
+        }
+    }
+
+    pub fn schedule(&mut self) {
+        self.is_scheduled = true;
+    }
+
+    pub fn reset(&mut self) {
+        self.is_set = false;
+        self.is_scheduled = false;
+    }
+
+    pub fn set_if_scheduled(&mut self) {
+        if self.is_scheduled {
+            println!("DEBUG IME set");
+            self.is_set = true;
+            self.is_scheduled = false;
+        }
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.is_set
+    }
+}
+
+struct Timer {
+    div: u8,  // FF04, Divider Register
+    tima: u8, // FF05, Timer Counter
+    tma: u8,  // FF06, Timer Modulo
+    tac: u8,  // FF07, Timer Control
+}
+
+impl Timer {
+    pub fn new() -> Timer {
+        Timer {
+            div: 0,
+            tima: 0,
+            tma: 0,
+            tac: 0,
+        }
+    }
+
+    fn read_byte(&self, address: u16) -> u8 {
+        match address {
+            0xFF04 => self.div,
+            0xFF05 => self.tima,
+            0xFF06 => self.tma,
+            0xFF07 => self.tac,
+            _ => !unreachable!("Invalid address for Timer"),
+        }
+    }
+
+    fn write_byte(&mut self, address: u16, val: u8) {
+        match address {
+            0xFF04 => self.div = 0,
+            0xFF05 => self.tima = val,
+            0xFF06 => self.tma = val,
+            0xFF07 => self.tac = val,
+            _ => !unreachable!("Invalid address for Timer"),
+        }
+    }
+}
+
 pub struct CPU {
     registers: Registers,
     memory: Memory,
-    ime: bool,
+    timer: Timer,
+    ime: IME,
 }
 
 impl fmt::Debug for CPU {
@@ -86,33 +208,23 @@ impl CPU {
         CPU {
             registers: Registers::new(),
             memory: Memory::new(rom),
-            ime: false,
+            timer: Timer::new(),
+            ime: IME::new(),
         }
     }
 
     pub fn run(&mut self) {
         loop {
-            self.step();
+            self.step(false);
         }
     }
 
     pub fn run_and_log_state(&mut self) {
+        let mut counter = 0;
         loop {
-            let instruction = self.get_instr();
-
-            println!("{:?}", self);
-
-            // if self.memory.read_byte(0xFF80) == 0xBC {
-            //     println!("FF80 set to BC")
-            // }
-            // println!("{:?}", instruction);
-
-            let InstrInfo {
-                length: instr_length,
-                cycles: _instr_cycles,
-            } = self.execute(instruction);
-
-            self.registers.pc += instr_length;
+            print!("{}: ", counter);
+            self.step(true);
+            counter += 1;
         }
     }
 
@@ -125,7 +237,15 @@ impl CPU {
         Instruction::decode(instruction_byte, prefixed)
     }
 
-    fn step(&mut self) {
+    fn step(&mut self, is_debug: bool) {
+        if is_debug {
+            println!("{:?}", self)
+        }
+
+        self.ime.set_if_scheduled();
+
+        self.handle_interrupts();
+
         let instruction = self.get_instr();
 
         let InstrInfo {
@@ -134,7 +254,7 @@ impl CPU {
         } = self.execute(instruction);
 
         self.registers.pc += instr_length;
-        // self.gpu.step(instr_cycles);
+        // self.tick(instr_cycles)
     }
 
     fn execute(&mut self, instruction: Instruction) -> InstrInfo {
@@ -199,8 +319,27 @@ impl CPU {
         }
     }
 
-    // Helper functions
+    fn tick(&self, m_cycles: u32) {}
 
+    fn read_byte(&self, address: u16) -> u8 {
+        self.tick(1);
+
+        match address {
+            0xFF04..=0xFF07 => self.timer.read_byte(address),
+            _ => self.memory.read_byte(address),
+        }
+    }
+
+    fn write_byte(&mut self, address: u16, val: u8) {
+        self.tick(1);
+
+        match address {
+            0xFF04..=0xFF07 => self.timer.write_byte(address, val),
+            _ => self.memory.write_byte(address, val),
+        }
+    }
+
+    // Helper functions
     fn get_imm8(&self) -> u8 {
         self.memory.read_byte(self.registers.pc + 1)
     }
@@ -433,6 +572,60 @@ impl CPU {
         let upper = self.memory.read_byte(self.registers.sp) as u16;
         self.registers.sp += 1;
         (upper << 8) | lower
+    }
+
+    fn handle_interrupts(&mut self) {
+        if !self.ime.is_set() {
+            return;
+        }
+
+        let interrupt = self.memory.get_enabled_interrupt();
+
+        match interrupt {
+            Some(i) => match i {
+                Interrupt::VBlank => {
+                    println!("DEBUG VBLANK INTERRUPT");
+                    let new_addr = 0x40;
+                    self.push_to_stack(self.registers.pc);
+                    self.registers.pc = new_addr;
+                    self.ime.reset();
+                    // self.tick(5)
+                }
+                Interrupt::LCD => {
+                    println!("DEBUG LCD INTERRUPT");
+                    let new_addr = 0x48;
+                    self.push_to_stack(self.registers.pc);
+                    self.registers.pc = new_addr;
+                    self.ime.reset();
+                    // self.tick(5)
+                }
+                Interrupt::Timer => {
+                    println!("DEBUG TIMER INTERRUPT");
+                    let new_addr = 0x50;
+                    self.push_to_stack(self.registers.pc);
+                    self.registers.pc = new_addr;
+                    self.ime.reset();
+                    // self.tick(5)
+                }
+                Interrupt::Serial => {
+                    println!("DEBUG SERIAL INTERRUPT");
+                    let new_addr = 0x58;
+                    self.push_to_stack(self.registers.pc);
+                    self.registers.pc = new_addr;
+                    self.ime.reset();
+                    // self.tick(5)
+                }
+                Interrupt::Joypad => {
+                    println!("DEBUG JOYPAD INTERRUPT");
+                    let new_addr = 0x60;
+                    self.push_to_stack(self.registers.pc);
+                    self.registers.pc = new_addr;
+                    self.ime.reset();
+                    // self.tick(5)
+                }
+            },
+            None => {}
+        }
     }
 
     // Instruction Functions
@@ -1367,7 +1560,7 @@ impl CPU {
     }
 
     fn reti(&mut self) -> InstrInfo {
-        self.ime = true;
+        self.ime.schedule();
         self.ret()
     }
 
@@ -1418,7 +1611,7 @@ impl CPU {
     }
 
     fn di(&mut self) -> InstrInfo {
-        self.ime = false; // TODO: cancel scheduled ei
+        self.ime.reset();
         InstrInfo {
             length: 1,
             cycles: 1,
@@ -1426,7 +1619,7 @@ impl CPU {
     }
 
     fn ei(&mut self) -> InstrInfo {
-        self.ime = true; // TODO: delay the interrupt enable by one cycle
+        self.ime.schedule(); // TODO: delay the interrupt enable by one cycle
         InstrInfo {
             length: 1,
             cycles: 1,
