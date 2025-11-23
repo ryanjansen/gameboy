@@ -1,9 +1,5 @@
-1. Impl debug for all instruction enums
-2. Impl debug for CPU with all register states in gameboy doctor format
-3. Create way to step through instructions one by one and print out instruction and CPU state
-4. Test ROMs with gameboy doctor
-5. Load Boot ROM
-6. Implement PPU, Timer, Interrupts, IO
-7. Run Tetris
-8. ???
-9. Run Pokemon
+1. Implement PPU
+2. Implement IO
+3. Run Tetris
+4. Implement MBC1
+5. Run Pokemon
