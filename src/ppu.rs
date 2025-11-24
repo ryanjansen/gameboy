@@ -14,11 +14,13 @@
 // Obj Palette 0: 0xFF48
 // Obj Palette 1: 0xFF49
 
-use pixels::{Error, Pixels, SurfaceTexture};
-use winit::window::Window;
-
+use rand::Rng;
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 144;
+const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+const LIGHT_GRAY: [u8; 4] = [0xA9, 0xA9, 0xA9, 0xFF];
+const DARK_GRAY: [u8; 4] = [0x54, 0x54, 0x54, 0xFF];
+const BLACK: [u8; 4] = [0x00, 0x00, 0x54, 0xFF];
 
 pub struct PPU {
     vram: [u8; 8192], // 0x8000 - 0x9FFF
@@ -36,11 +38,12 @@ pub struct PPU {
     obp1: u8,
     mode: Mode,
     clock: u16, // In dots (t-cycles)
-    frame: Frame,
+    line: u8,
+    buffer: [u8; (WIDTH * HEIGHT * 4) as usize],
 }
 
 impl PPU {
-    pub fn new(window: &'static Window) -> PPU {
+    pub fn new() -> PPU {
         PPU {
             vram: [0u8; 8192],
             oam: [0u8; 160],
@@ -57,12 +60,18 @@ impl PPU {
             obp1: 0,
             mode: Mode::OAMScan,
             clock: 0,
-            frame: Frame::new(window).expect("Frame failed to create"),
+            line: 0,
+            buffer: [0u8; (WIDTH * HEIGHT * 4) as usize],
         }
+    }
+
+    pub fn is_ready_to_render(&self) -> bool {
+        matches!(self.mode, Mode::VBlank)
     }
 
     // Tick by one M-Cycle = 4 Dots
     pub fn tick(&mut self) {
+        // TODO: Request VBlank and Stat Interrupts
         self.clock += 4;
 
         match self.mode {
@@ -77,7 +86,7 @@ impl PPU {
                 if self.clock == 172 {
                     // TODO: Calculate accurate mode 3 timing
                     self.clock = 0;
-                    self.frame.render_line();
+                    self.render_line();
                     self.mode = Mode::HBlank
                     // Check Stat Interrupt
                 }
@@ -85,8 +94,9 @@ impl PPU {
             Mode::HBlank => {
                 if self.clock == 204 {
                     self.clock = 0;
-                    if self.frame.line == 143 {
-                        self.frame.render_frame();
+                    self.line += 1;
+
+                    if self.line == 143 {
                         self.mode = Mode::VBlank
                         // Request VBlank Interrupt
                     } else {
@@ -98,16 +108,32 @@ impl PPU {
             Mode::VBlank => {
                 if self.clock == 456 {
                     self.clock = 0;
-                    self.frame.line += 1;
+                    self.line += 1;
 
-                    if self.frame.line > 153 {
+                    if self.line > 153 {
                         self.mode = Mode::OAMScan;
                         // Check Stat Interrupt
-                        self.frame.line = 0
+                        self.line = 0
                     }
                 }
             }
         }
+    }
+
+    fn is_ppu_enabled(&self) -> bool {
+        (self.lcdc & (1 << 7)) != 0
+    }
+
+    fn is_window_enabled(&self) -> bool {
+        (self.lcdc & 1) != 0 && (self.lcdc & (1 << 5)) != 0
+    }
+
+    fn is_bg_enabled(&self) -> bool {
+        (self.lcdc & 1) != 0
+    }
+
+    fn is_obj_enabled(&self) -> bool {
+        (self.lcdc & (1 << 1)) != 0
     }
 
     fn is_vram_accessible(&self) -> bool {
@@ -185,45 +211,85 @@ impl PPU {
             _ => panic!("Invalid address ${:04X} for PPU", address),
         }
     }
-}
 
-struct Frame {
-    buffer: Pixels<'static>,
-    line: u16,
-}
+    pub fn draw(&mut self, frame: &mut [u8]) {
+        frame.copy_from_slice(&self.buffer.clone());
+    }
 
-impl Frame {
-    fn new(window: &'static Window) -> Result<Frame, Error> {
-        let window_size = window.inner_size();
-        let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, window);
+    fn get_palette(&self, val: u8) -> Vec<[u8; 4]> {
+        let mut palette = Vec::new();
 
-        Ok(Frame {
-            buffer: Pixels::new(WIDTH, HEIGHT, surface_texture)?,
-            line: 0,
-        })
+        for i in 0..4 {
+            match val >> (i * 2) & 0x03 {
+                0 => palette.push(WHITE),
+                1 => palette.push(LIGHT_GRAY),
+                2 => palette.push(DARK_GRAY),
+                3 => palette.push(BLACK),
+                _ => unreachable!(),
+            }
+        }
+
+        palette
+    }
+
+    fn get_tile_address(&self, tile_id: u8, is_win_or_bg: bool) -> u16 {
+        if is_win_or_bg && ((self.lcdc & 1 << 4) == 0) {
+            (0x9000_u16.wrapping_add(tile_id as i8 as u16 * 16)) as u16 // TODO: is this accurate?
+        } else {
+            0x8000 + 16 * tile_id as u16
+        }
     }
 
     fn render_line(&mut self) {
-        let stride = (WIDTH * 4) as usize;
-        let start = stride * (self.line) as usize;
-        let end = start + stride;
+        let mut scanline = [0xFFu8; 640];
 
-        let pixels = self.buffer.frame_mut();
-        let curr_line = &mut pixels[start..end];
+        self.draw_bg(&mut scanline);
+        self.draw_sprites(&mut scanline);
 
-        let color = if self.line % 2 == 0 {
-            [0x00, 0x00, 0x00, 0x00]
+        // Update buffer with scanline
+    }
+
+    fn draw_bg(&self, scanline: &mut [u8]) {
+        if !self.is_bg_enabled() || !self.is_ppu_enabled() {
+            return;
+        }
+
+        // TODO: Draw window tiles
+
+        let tilemap_base_address: u16 = if self.lcdc & (1 << 3) != 0 {
+            0x9800
         } else {
-            [0xFF, 0xFF, 0xFF, 0xFF]
+            0x9C00
         };
 
-        for pixel in curr_line.chunks_exact_mut(4) {
+        let bg_y = (self.line.wrapping_add(self.scy) % 256) as u16;
+        let tile_y = bg_y >> 3;
+
+        for (x, pixel) in scanline.chunks_exact_mut(4).enumerate() {
+            let bg_x = (self.scx.wrapping_add(x as u8) % 256) as u16;
+            let tile_x = bg_x >> 3;
+
+            let tile_id = self.read_vram(tilemap_base_address + (32 * tile_y) + tile_x);
+
+            let tile_row_addr = self.get_tile_address(tile_id, true) + (bg_y & 0b111) * 2;
+
+            let tile_row_1 = self.read_vram(tile_row_addr);
+            let tile_row_2 = self.read_vram(tile_row_addr + 1);
+
+            let pixel_x = bg_x & 0b111;
+
+            let color_id = ((tile_row_1 >> pixel_x) & 1) & ((tile_row_2 >> pixel_x & 1) << 1);
+
+            let palette = self.get_palette(self.bgp);
+
+            let color = palette[color_id as usize];
+
             pixel.copy_from_slice(&color);
         }
     }
 
-    fn render_frame(&mut self) {
-        self.buffer.render().unwrap();
+    fn draw_sprites(&self, scanline: &mut [u8]) {
+        // TODO: Draw sprites from OAM
     }
 }
 

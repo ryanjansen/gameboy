@@ -1,7 +1,6 @@
 use crate::instruction::*;
 use crate::ppu::PPU;
 use crate::register::Registers;
-use winit::window::Window;
 
 use std::fmt;
 
@@ -89,7 +88,6 @@ impl IME {
 
     pub fn set_if_scheduled(&mut self) {
         if self.is_scheduled {
-            // println!("DEBUG IME set");
             self.is_set = true;
             self.is_scheduled = false;
         }
@@ -255,7 +253,7 @@ impl Interrupts {
 pub struct CPU {
     registers: Registers,
     memory: Memory,
-    ppu: PPU,
+    pub ppu: PPU,
     timer: Timer,
     interrupts: Interrupts,
     ime: IME,
@@ -286,27 +284,16 @@ impl fmt::Debug for CPU {
 }
 
 impl CPU {
-    pub fn new(rom: [u8; 0xFFFF], window: &'static Window) -> CPU {
+    // TODO: Add joypad input, sound, mbc
+    pub fn new(rom: [u8; 0xFFFF]) -> CPU {
         CPU {
             registers: Registers::new(),
             memory: Memory::new(rom),
-            ppu: PPU::new(window),
+            ppu: PPU::new(),
             timer: Timer::new(),
             interrupts: Interrupts::new(),
             ime: IME::new(),
             is_halted: false,
-        }
-    }
-
-    pub fn run(&mut self) {
-        loop {
-            self.step(false);
-        }
-    }
-
-    pub fn run_and_log_state(&mut self) {
-        loop {
-            self.step(true);
         }
     }
 
@@ -319,14 +306,10 @@ impl CPU {
         Instruction::decode(instruction_byte, prefixed)
     }
 
-    fn step(&mut self, is_debug: bool) {
+    pub fn step(&mut self) {
         if self.is_halted {
             self.handle_halted();
             return;
-        }
-
-        if is_debug {
-            println!("{:?}", self)
         }
 
         self.ime.set_if_scheduled();
@@ -407,6 +390,7 @@ impl CPU {
     }
 
     fn tick(&mut self, m_cycles: u16) {
+        // TODO: tick instructions correctly
         for _ in 0..m_cycles {
             self.timer.tick(&mut self.interrupts);
             self.ppu.tick();
