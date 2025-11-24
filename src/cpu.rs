@@ -1,5 +1,8 @@
 use crate::instruction::*;
+use crate::ppu::PPU;
 use crate::register::Registers;
+use winit::window::Window;
+
 use std::fmt;
 
 type Cycles = u16;
@@ -252,6 +255,7 @@ impl Interrupts {
 pub struct CPU {
     registers: Registers,
     memory: Memory,
+    ppu: PPU,
     timer: Timer,
     interrupts: Interrupts,
     ime: IME,
@@ -282,10 +286,11 @@ impl fmt::Debug for CPU {
 }
 
 impl CPU {
-    pub fn new(rom: [u8; 0xFFFF]) -> CPU {
+    pub fn new(rom: [u8; 0xFFFF], window: &'static Window) -> CPU {
         CPU {
             registers: Registers::new(),
             memory: Memory::new(rom),
+            ppu: PPU::new(window),
             timer: Timer::new(),
             interrupts: Interrupts::new(),
             ime: IME::new(),
@@ -404,6 +409,7 @@ impl CPU {
     fn tick(&mut self, m_cycles: u16) {
         for _ in 0..m_cycles {
             self.timer.tick(&mut self.interrupts);
+            self.ppu.tick();
         }
     }
 
@@ -411,6 +417,9 @@ impl CPU {
         // self.tick(1);
 
         match address {
+            0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
+                self.ppu.read_byte(address)
+            }
             0xFF04..=0xFF07 => self.timer.read_byte(address),
             0xFF0F => self.interrupts.interrupt_flag,
             0xFFFF => self.interrupts.interrupt_enable,
@@ -422,6 +431,9 @@ impl CPU {
         // self.tick(1);
 
         match address {
+            0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
+                self.ppu.write_byte(address, val)
+            }
             0xFF04..=0xFF07 => self.timer.write_byte(address, val),
             0xFF0F => {
                 //     println!("DEBUG Writing {:02X} to FF0F", val);
