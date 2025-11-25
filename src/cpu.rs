@@ -11,7 +11,7 @@ struct InstrInfo {
     cycles: Cycles,
 }
 
-enum Interrupt {
+pub enum Interrupt {
     VBlank,
     LCD,
     Timer,
@@ -19,8 +19,16 @@ enum Interrupt {
     Joypad,
 }
 
-fn is_bit_set(val: u8, bit_index: u8) -> bool {
+pub fn is_bit_set(val: u8, bit_index: u8) -> bool {
     (val & (1 << bit_index)) != 0
+}
+
+pub fn set_bit(val: u8, bit_index: u8) -> u8 {
+    val | (1 << bit_index)
+}
+
+pub fn reset_bit(val: u8, bit_index: u8) -> u8 {
+    val & !(1 << bit_index)
 }
 
 struct Memory {
@@ -54,6 +62,17 @@ impl Memory {
         } else {
             panic!("Invalid memory address {:04X}", address)
         }
+    }
+
+    fn get_dma_oam(&self, start_addr: u16) -> [u8; 0xA0] {
+        let start = start_addr as usize;
+        let end = start + 0x9F;
+
+        let mut oam = [0u8; 0xA0];
+
+        oam.copy_from_slice(&self.memory[start..end]);
+
+        oam
     }
 }
 
@@ -201,7 +220,7 @@ impl Timer {
     }
 }
 
-struct Interrupts {
+pub struct Interrupts {
     pub interrupt_enable: u8,
     pub interrupt_flag: u8,
 }
@@ -235,7 +254,7 @@ impl Interrupts {
         }
     }
 
-    fn request_interrupt(&mut self, interrupt: Interrupt) {
+    pub fn request_interrupt(&mut self, interrupt: Interrupt) {
         match interrupt {
             Interrupt::VBlank => self.interrupt_flag |= 1,
             Interrupt::LCD => self.interrupt_flag |= 1 << 1,
@@ -393,7 +412,7 @@ impl CPU {
         // TODO: tick instructions correctly
         for _ in 0..m_cycles {
             self.timer.tick(&mut self.interrupts);
-            self.ppu.tick();
+            self.ppu.tick(&mut self.interrupts);
         }
     }
 
@@ -418,19 +437,19 @@ impl CPU {
             0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
                 self.ppu.write_byte(address, val)
             }
+            0xFF46 => self.start_dma_transfer(val),
             0xFF04..=0xFF07 => self.timer.write_byte(address, val),
-            0xFF0F => {
-                //     println!("DEBUG Writing {:02X} to FF0F", val);
-                //     println!("{:?}", self.timer);
-                self.interrupts.interrupt_flag = val
-            }
-            0xFFFF => {
-                //     println!("DEBUG Writing {:02X} to FFFF", val);
-                //     println!("{:?}", self.timer);
-                self.interrupts.interrupt_enable = val
-            }
+            0xFF0F => self.interrupts.interrupt_flag = val,
+            0xFFFF => self.interrupts.interrupt_enable = val,
             _ => self.memory.write_byte(address, val),
         }
+    }
+
+    fn start_dma_transfer(&mut self, val: u8) {
+        let start_index = (val as u16) << 8;
+
+        let oam = self.memory.get_dma_oam(start_index);
+        self.ppu.dma(oam, &mut self.interrupts);
     }
 
     fn handle_halted(&mut self) {
@@ -1544,8 +1563,7 @@ impl CPU {
             Operand::Register(reg) => {
                 let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
                 let reg_val = self.get_register_val(reg);
-                let mask = !(1 << bit_index);
-                self.set_register(reg, reg_val & mask);
+                self.set_register(reg, reset_bit(reg_val, bit_index));
                 InstrInfo { length: 2, cycles }
             }
 
@@ -1558,7 +1576,7 @@ impl CPU {
             Operand::Register(reg) => {
                 let cycles = if matches!(reg, R8::IndirectHL) { 4 } else { 2 };
                 let reg_val = self.get_register_val(reg);
-                self.set_register(reg, reg_val | (1 << bit_index));
+                self.set_register(reg, set_bit(reg_val, bit_index));
                 InstrInfo { length: 2, cycles }
             }
 

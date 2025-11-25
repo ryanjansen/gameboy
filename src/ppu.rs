@@ -14,7 +14,7 @@
 // Obj Palette 0: 0xFF48
 // Obj Palette 1: 0xFF49
 
-use rand::Rng;
+use crate::cpu::{Interrupt, Interrupts, is_bit_set, set_bit};
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 144;
 const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
@@ -26,7 +26,6 @@ pub struct PPU {
     vram: [u8; 8192], // 0x8000 - 0x9FFF
     oam: [u8; 160],   // 0xFE00 - 0xFE9F
     lcdc: u8,
-    ly: u8,
     lyc: u8,
     stat: u8,
     scy: u8,
@@ -48,7 +47,6 @@ impl PPU {
             vram: [0u8; 8192],
             oam: [0u8; 160],
             lcdc: 0,
-            ly: 0,
             lyc: 0,
             stat: 0,
             scy: 0,
@@ -70,8 +68,7 @@ impl PPU {
     }
 
     // Tick by one M-Cycle = 4 Dots
-    pub fn tick(&mut self) {
-        // TODO: Request VBlank and Stat Interrupts
+    pub fn tick(&mut self, interrupt_handler: &mut Interrupts) {
         self.clock += 4;
 
         match self.mode {
@@ -79,7 +76,6 @@ impl PPU {
                 if self.clock == 80 {
                     self.clock = 0;
                     self.mode = Mode::Drawing;
-                    // Check Stat Interrupt
                 }
             }
             Mode::Drawing => {
@@ -87,8 +83,7 @@ impl PPU {
                     // TODO: Calculate accurate mode 3 timing
                     self.clock = 0;
                     self.render_line();
-                    self.mode = Mode::HBlank
-                    // Check Stat Interrupt
+                    self.mode = Mode::HBlank;
                 }
             }
             Mode::HBlank => {
@@ -97,11 +92,10 @@ impl PPU {
                     self.line += 1;
 
                     if self.line == 143 {
-                        self.mode = Mode::VBlank
-                        // Request VBlank Interrupt
+                        self.mode = Mode::VBlank;
+                        interrupt_handler.request_interrupt(Interrupt::VBlank);
                     } else {
-                        self.mode = Mode::OAMScan
-                        // Check Stat Interrupt
+                        self.mode = Mode::OAMScan;
                     }
                 }
             }
@@ -112,11 +106,50 @@ impl PPU {
 
                     if self.line > 153 {
                         self.mode = Mode::OAMScan;
-                        // Check Stat Interrupt
-                        self.line = 0
+                        self.line = 0;
                     }
                 }
             }
+        }
+
+        self.check_stat_interrupt(interrupt_handler);
+        self.update_stat();
+    }
+
+    fn check_stat_interrupt(&self, interrupt_handler: &mut Interrupts) {
+        if is_bit_set(self.stat, 6) {
+            if self.line == self.lyc {
+                interrupt_handler.request_interrupt(Interrupt::LCD);
+            }
+        }
+
+        if is_bit_set(self.stat, 5) {
+            if matches!(self.mode, Mode::OAMScan) {
+                interrupt_handler.request_interrupt(Interrupt::LCD);
+            }
+        }
+        if is_bit_set(self.stat, 4) {
+            if matches!(self.mode, Mode::VBlank) {
+                interrupt_handler.request_interrupt(Interrupt::LCD);
+            }
+        }
+        if is_bit_set(self.stat, 3) {
+            if matches!(self.mode, Mode::HBlank) {
+                interrupt_handler.request_interrupt(Interrupt::LCD);
+            }
+        }
+    }
+
+    fn update_stat(&mut self) {
+        if self.line == self.lyc {
+            self.stat = set_bit(self.stat, 2);
+        }
+
+        if self.is_ppu_enabled() {
+            let mode_num = self.mode as u8;
+            self.stat = self.stat & (0b11111100 | (mode_num & 0b11))
+        } else {
+            self.stat &= 0b11111100
         }
     }
 
@@ -171,7 +204,7 @@ impl PPU {
             0x8000..=0x9FFF => self.read_vram(address),
             0xFE00..=0xFE9F => self.read_oam(address),
             0xFF40 => self.lcdc,
-            0xFF44 => self.ly,
+            0xFF44 => self.line,
             0xFF45 => self.lyc,
             0xFF41 => self.stat,
             0xFF42 => self.scy,
@@ -198,7 +231,7 @@ impl PPU {
                 }
             }
             0xFF40 => self.lcdc = val,
-            0xFF44 => self.ly = val,
+            0xFF44 => panic!("Not allowed to write to LY"),
             0xFF45 => self.lyc = val,
             0xFF41 => self.stat = val,
             0xFF42 => self.scy = val,
@@ -209,6 +242,16 @@ impl PPU {
             0xFF48 => self.obp0 = val,
             0xFF49 => self.obp1 = val,
             _ => panic!("Invalid address ${:04X} for PPU", address),
+        }
+    }
+
+    pub fn dma(&mut self, oam: [u8; 160], interrupt_handler: &mut Interrupts) {
+        let mut i = 0;
+
+        for addr in 0xFE00..=0xFE9F {
+            self.write_byte(addr, oam[i]);
+            i += 1;
+            self.tick(interrupt_handler);
         }
     }
 
@@ -242,32 +285,42 @@ impl PPU {
 
     fn render_line(&mut self) {
         let mut scanline = [0xFFu8; 640];
+        let mut bg_color_ids = [0xFFu8; 640];
 
-        self.draw_bg(&mut scanline);
-        self.draw_sprites(&mut scanline);
+        self.draw_bg(&mut scanline, &mut bg_color_ids);
+        self.draw_sprites(&mut scanline, &bg_color_ids);
 
         // Update buffer with scanline
     }
 
-    fn draw_bg(&self, scanline: &mut [u8]) {
+    fn draw_bg(&self, scanline: &mut [u8], bg_color_ids: &mut [u8]) {
         if !self.is_bg_enabled() || !self.is_ppu_enabled() {
             return;
         }
 
-        // TODO: Draw window tiles
-
-        let tilemap_base_address: u16 = if self.lcdc & (1 << 3) != 0 {
-            0x9800
-        } else {
-            0x9C00
-        };
-
-        let bg_y = (self.line.wrapping_add(self.scy) % 256) as u16;
+        let bg_y = (self.line.wrapping_add(self.scy) & 255) as u16;
+        let is_win_on_y = self.is_window_enabled() && (self.wy as u16) >= bg_y;
         let tile_y = bg_y >> 3;
 
         for (x, pixel) in scanline.chunks_exact_mut(4).enumerate() {
-            let bg_x = (self.scx.wrapping_add(x as u8) % 256) as u16;
+            let bg_x = (self.scx.wrapping_add(x as u8) & 255) as u16;
             let tile_x = bg_x >> 3;
+
+            let tilemap_base_address = if is_win_on_y && bg_x + 7 >= self.wx as u16 {
+                // Window tilemap
+                if self.lcdc & (1 << 5) != 0 {
+                    0x9800
+                } else {
+                    0x9C00
+                }
+            } else {
+                // BG tilemap
+                if self.lcdc & (1 << 3) != 0 {
+                    0x9800
+                } else {
+                    0x9C00
+                }
+            };
 
             let tile_id = self.read_vram(tilemap_base_address + (32 * tile_y) + tile_x);
 
@@ -284,18 +337,148 @@ impl PPU {
 
             let color = palette[color_id as usize];
 
+            bg_color_ids[x] = color_id;
+
             pixel.copy_from_slice(&color);
         }
     }
 
-    fn draw_sprites(&self, scanline: &mut [u8]) {
-        // TODO: Draw sprites from OAM
+    fn draw_sprites(&self, scanline: &mut [u8], bg_color_ids: &[u8]) {
+        if !self.is_obj_enabled() {
+            return;
+        }
+
+        let y = self.line.wrapping_add(self.scy) & 255;
+
+        let sprites: Vec<Sprite> = self.get_sprites(y); // visible sprites sorted by x desc, oam desc
+
+        for sprite in sprites {
+            self.draw_sprite(y, sprite, scanline, bg_color_ids);
+        }
+
+        // Scan OAM to find first 10 sprites that match y coordinate
+        // Go through sprites and draw their lines if on screen
+    }
+
+    fn draw_sprite(&self, screen_y: u8, sprite: Sprite, scanline: &mut [u8], bg_color_ids: &[u8]) {
+        let is_large_size = is_bit_set(self.lcdc, 2);
+
+        let mut sprite_row = if is_large_size { 15 } else { 7 } - (sprite.y - screen_y) as u16;
+
+        if sprite.y_flip {
+            sprite_row = if is_large_size { 15 } else { 7 } - sprite_row;
+        }
+
+        let tile_id = if is_large_size {
+            if sprite_row <= 7 {
+                sprite.tile_id & 0xFE
+            } else {
+                sprite.tile_id | 0x01
+            }
+        } else {
+            sprite.tile_id
+        };
+
+        let tile_row_addr = self.get_tile_address(tile_id, false) + (sprite_row & 0x07) * 2;
+
+        let tile_row_1 = self.read_vram(tile_row_addr);
+        let tile_row_2 = self.read_vram(tile_row_addr + 1);
+
+        let start_x = sprite.x.saturating_sub(8) as usize;
+        let end_x = if start_x + 8 > 159 { 159 } else { start_x + 8 };
+
+        for (i, pixel) in scanline[start_x..end_x].chunks_exact_mut(4).enumerate() {
+            let screen_x = start_x + i;
+
+            let mut pixel_num = screen_x & 0b111;
+
+            if sprite.x_flip {
+                pixel_num = 7 - pixel_num;
+            }
+
+            let color_id = ((tile_row_1 >> pixel_num) & 1) & ((tile_row_2 >> pixel_num & 1) << 1);
+
+            if color_id == 0 {
+                continue;
+            }
+
+            let bg_color_id = bg_color_ids[screen_x];
+
+            if sprite.priority && bg_color_id != 0 {
+                continue;
+            }
+
+            let palette = self.get_palette(if sprite.palette { self.obp1 } else { self.obp0 });
+
+            let color = palette[color_id as usize];
+
+            pixel.copy_from_slice(&color);
+        }
+    }
+
+    fn get_sprites(&self, y: u8) -> Vec<Sprite> {
+        let mut sprites: Vec<Sprite> = Vec::new();
+
+        for (idx, sprite_bytes) in self.oam.chunks_exact(4).enumerate() {
+            if sprites.len() == 10 {
+                break;
+            }
+
+            let sprite_y = sprite_bytes[0];
+
+            if is_bit_set(self.lcdc, 2) {
+                // 8 x 16 size
+                if y >= sprite_y - 16 && y <= sprite_y {
+                    sprites.push(Sprite::new(sprite_bytes, idx as u8));
+                }
+            } else {
+                if y >= sprite_y - 16 && y <= sprite_y - 8 {
+                    sprites.push(Sprite::new(sprite_bytes, idx as u8));
+                }
+            }
+        }
+
+        let mut visible_sprites: Vec<Sprite> = sprites
+            .into_iter()
+            .filter(|sprite| sprite.x > 0 && sprite.x < 168)
+            .collect();
+
+        visible_sprites.sort_by_key(|sprite| (sprite.x, sprite.oam_idx));
+
+        return visible_sprites;
     }
 }
 
+struct Sprite {
+    oam_idx: u8,
+    y: u8,
+    x: u8,
+    tile_id: u8,
+    priority: bool,
+    y_flip: bool,
+    x_flip: bool,
+    palette: bool,
+}
+
+impl Sprite {
+    fn new(bytes: &[u8], oam_idx: u8) -> Sprite {
+        Sprite {
+            oam_idx,
+            y: bytes[0],
+            x: bytes[1],
+            tile_id: bytes[2],
+            priority: is_bit_set(bytes[3], 7),
+            y_flip: is_bit_set(bytes[3], 6),
+            x_flip: is_bit_set(bytes[3], 5),
+            palette: is_bit_set(bytes[3], 4),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum Mode {
-    OAMScan, // Mode 2
-    Drawing, // Mode 3
-    HBlank,  // Mode 0
-    VBlank,  // Mode 1
+    OAMScan = 2, // Mode 2
+    Drawing = 3, // Mode 3
+    HBlank = 0,  // Mode 0
+    VBlank = 1,  // Mode 1
 }
