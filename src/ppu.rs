@@ -39,6 +39,7 @@ pub struct PPU {
     clock: u16, // In dots (t-cycles)
     line: u8,
     buffer: [u8; (WIDTH * HEIGHT * 4) as usize],
+    is_ready_to_render: bool,
 }
 
 impl PPU {
@@ -46,25 +47,26 @@ impl PPU {
         PPU {
             vram: [0u8; 8192],
             oam: [0u8; 160],
-            lcdc: 0,
+            lcdc: 0x91,
             lyc: 0,
-            stat: 0,
+            stat: 0x81,
             scy: 0,
             scx: 0,
             wy: 0,
             wx: 0,
-            bgp: 0,
+            bgp: 0xFC,
             obp0: 0,
             obp1: 0,
-            mode: Mode::OAMScan,
+            mode: Mode::VBlank,
             clock: 0,
-            line: 0,
+            line: 0x91,
             buffer: [0u8; (WIDTH * HEIGHT * 4) as usize],
+            is_ready_to_render: true,
         }
     }
 
     pub fn is_ready_to_render(&self) -> bool {
-        matches!(self.mode, Mode::VBlank)
+        self.is_ready_to_render
     }
 
     // Tick by one M-Cycle = 4 Dots
@@ -103,6 +105,8 @@ impl PPU {
                 if self.clock == 456 {
                     self.clock = 0;
                     self.line += 1;
+
+                    self.is_ready_to_render = true;
 
                     if self.line > 153 {
                         self.mode = Mode::OAMScan;
@@ -184,25 +188,29 @@ impl PPU {
     }
 
     fn read_vram(&self, address: u16) -> u8 {
-        if self.is_vram_accessible() {
-            self.vram[(address - 0x8000) as usize]
-        } else {
-            0xFF
-        }
+        self.vram[(address - 0x8000) as usize]
     }
 
     fn read_oam(&self, address: u16) -> u8 {
-        if self.is_oam_accessible() {
-            self.oam[(address - 0xFE00) as usize]
-        } else {
-            0xFF
-        }
+        self.oam[(address - 0xFE00) as usize]
     }
 
     pub fn read_byte(&self, address: u16) -> u8 {
         match address {
-            0x8000..=0x9FFF => self.read_vram(address),
-            0xFE00..=0xFE9F => self.read_oam(address),
+            0x8000..=0x9FFF => {
+                if self.is_vram_accessible() {
+                    self.read_vram(address)
+                } else {
+                    0xFF
+                }
+            }
+            0xFE00..=0xFE9F => {
+                if self.is_oam_accessible() {
+                    self.read_oam(address)
+                } else {
+                    0xFF
+                }
+            }
             0xFF40 => self.lcdc,
             0xFF44 => self.line,
             0xFF45 => self.lyc,
@@ -257,6 +265,7 @@ impl PPU {
 
     pub fn draw(&mut self, frame: &mut [u8]) {
         frame.copy_from_slice(&self.buffer.clone());
+        self.is_ready_to_render = false;
     }
 
     fn get_palette(&self, val: u8) -> Vec<[u8; 4]> {
@@ -284,13 +293,18 @@ impl PPU {
     }
 
     fn render_line(&mut self) {
+        // println!("{:?}", self.mode);
         let mut scanline = [0xFFu8; 640];
-        let mut bg_color_ids = [0xFFu8; 640];
+        let mut bg_color_ids = [0xFFu8; 160];
 
         self.draw_bg(&mut scanline, &mut bg_color_ids);
         self.draw_sprites(&mut scanline, &bg_color_ids);
 
         // Update buffer with scanline
+        let offset = (self.line as usize * 640) as usize;
+        let dest_line = &mut self.buffer[offset..offset + 640];
+
+        dest_line.copy_from_slice(scanline.as_mut_slice());
     }
 
     fn draw_bg(&self, scanline: &mut [u8], bg_color_ids: &mut [u8]) {
@@ -309,20 +323,22 @@ impl PPU {
             let tilemap_base_address = if is_win_on_y && bg_x + 7 >= self.wx as u16 {
                 // Window tilemap
                 if self.lcdc & (1 << 5) != 0 {
-                    0x9800
-                } else {
                     0x9C00
+                } else {
+                    0x9800
                 }
             } else {
                 // BG tilemap
                 if self.lcdc & (1 << 3) != 0 {
-                    0x9800
-                } else {
                     0x9C00
+                } else {
+                    0x9800
                 }
             };
 
-            let tile_id = self.read_vram(tilemap_base_address + (32 * tile_y) + tile_x);
+            let tile_addr = tilemap_base_address + (32 * tile_y) + tile_x;
+
+            let tile_id = self.read_vram(tile_addr);
 
             let tile_row_addr = self.get_tile_address(tile_id, true) + (bg_y & 0b111) * 2;
 
@@ -331,7 +347,17 @@ impl PPU {
 
             let pixel_x = bg_x & 0b111;
 
-            let color_id = ((tile_row_1 >> pixel_x) & 1) & ((tile_row_2 >> pixel_x & 1) << 1);
+            let msb = ((tile_row_2 >> pixel_x) & 1) << 1;
+            let lsb = (tile_row_1 >> pixel_x) & 1;
+
+            let color_id = ((tile_row_1 >> pixel_x) & 1) | ((tile_row_2 >> pixel_x & 1) << 1);
+            if tile_id == 48 {
+                println!("TILE 48 ROW Byte 1 {:08b}", tile_row_1);
+                println!("TILE 48 ROW Byte 2 {:08b}", tile_row_2);
+                println!("TILE MSB: {:02b}", msb);
+                println!("TILE LSB: {:02b}", lsb);
+                println!("TILE Color ID: {:02b}", color_id);
+            }
 
             let palette = self.get_palette(self.bgp);
 
@@ -449,6 +475,7 @@ impl PPU {
     }
 }
 
+#[derive(Debug)]
 struct Sprite {
     oam_idx: u8,
     y: u8,
@@ -475,7 +502,7 @@ impl Sprite {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Mode {
     OAMScan = 2, // Mode 2
     Drawing = 3, // Mode 3

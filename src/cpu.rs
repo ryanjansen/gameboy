@@ -131,10 +131,10 @@ struct Timer {
 impl Timer {
     pub fn new() -> Timer {
         Timer {
-            sysclock: 0,
+            sysclock: 0x18 << 6,
             tima: 0,
             tma: 0,
-            tac: 0,
+            tac: 0xF8,
             is_tima_reloading: false,
             is_interrupt_scheduled: false,
             last_bit: 0,
@@ -229,7 +229,7 @@ impl Interrupts {
     pub fn new() -> Interrupts {
         Interrupts {
             interrupt_enable: 0,
-            interrupt_flag: 0,
+            interrupt_flag: 0xE1,
         }
     }
 
