@@ -4,271 +4,6 @@ use crate::register::Registers;
 
 use std::fmt;
 
-type Cycles = u16;
-
-struct InstrInfo {
-    length: u16,
-    cycles: Cycles,
-}
-
-pub enum Interrupt {
-    VBlank,
-    LCD,
-    Timer,
-    Serial,
-    Joypad,
-}
-
-pub fn is_bit_set(val: u8, bit_index: u8) -> bool {
-    (val & (1 << bit_index)) != 0
-}
-
-pub fn set_bit(val: u8, bit_index: u8) -> u8 {
-    val | (1 << bit_index)
-}
-
-pub fn reset_bit(val: u8, bit_index: u8) -> u8 {
-    val & !(1 << bit_index)
-}
-
-struct Memory {
-    memory: [u8; 0xFFFF],
-}
-
-impl fmt::Debug for Memory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Memory")
-            .field("length", &self.memory.len())
-            .finish()
-    }
-}
-
-impl Memory {
-    fn new(rom: [u8; 0xFFFF]) -> Memory {
-        Memory { memory: rom }
-    }
-
-    fn read_byte(&self, address: u16) -> u8 {
-        if address == 0xFF44 {
-            return 0x90;
-        } else {
-            self.memory[address as usize]
-        }
-    }
-
-    fn write_byte(&mut self, address: u16, val: u8) {
-        if address < 0xFFFF {
-            self.memory[address as usize] = val
-        } else {
-            panic!("Invalid memory address {:04X}", address)
-        }
-    }
-
-    fn get_dma_oam(&self, start_addr: u16) -> [u8; 0xA0] {
-        let start = start_addr as usize;
-        let end = start + 0x9F;
-
-        let mut oam = [0u8; 0xA0];
-
-        oam.copy_from_slice(&self.memory[start..end]);
-
-        oam
-    }
-}
-
-pub struct Flags {
-    pub zero: Option<bool>,
-    pub subtract: Option<bool>,
-    pub half_carry: Option<bool>,
-    pub carry: Option<bool>,
-}
-
-struct IME {
-    is_set: bool,
-    is_scheduled: bool,
-}
-
-impl IME {
-    pub fn new() -> IME {
-        IME {
-            is_set: false,
-            is_scheduled: false,
-        }
-    }
-
-    pub fn schedule(&mut self) {
-        self.is_scheduled = true;
-    }
-
-    pub fn reset(&mut self) {
-        self.is_set = false;
-        self.is_scheduled = false;
-    }
-
-    pub fn set_if_scheduled(&mut self) {
-        if self.is_scheduled {
-            self.is_set = true;
-            self.is_scheduled = false;
-        }
-    }
-
-    pub fn is_set(&self) -> bool {
-        self.is_set
-    }
-}
-
-#[derive(Debug)]
-struct Timer {
-    sysclock: u16, // FF04, Div (upper 8 bits)
-    tima: u8,      // FF05, Timer Counter
-    tma: u8,       // FF06, Timer Modulo
-    tac: u8,       // FF07, Timer Control
-    is_tima_reloading: bool,
-    is_interrupt_scheduled: bool,
-    last_bit: u8,
-}
-
-impl Timer {
-    pub fn new() -> Timer {
-        Timer {
-            sysclock: 0x18 << 6,
-            tima: 0,
-            tma: 0,
-            tac: 0xF8,
-            is_tima_reloading: false,
-            is_interrupt_scheduled: false,
-            last_bit: 0,
-        }
-    }
-
-    fn read_byte(&self, address: u16) -> u8 {
-        match address {
-            0xFF04 => ((self.sysclock >> 6) & 0xFF) as u8,
-            0xFF05 => self.tima,
-            0xFF06 => self.tma,
-            0xFF07 => self.tac,
-            _ => unreachable!("Invalid address for Timer"),
-        }
-    }
-
-    fn write_byte(&mut self, address: u16, val: u8) {
-        match address {
-            0xFF04 => self.set_sysclock(0),
-            0xFF05 => {
-                if !self.is_tima_reloading {
-                    self.tima = val;
-                }
-
-                if self.is_interrupt_scheduled {
-                    self.is_interrupt_scheduled = false;
-                }
-            }
-            0xFF06 => {
-                if self.is_tima_reloading {
-                    self.tima = val
-                }
-                self.tma = val;
-            }
-            0xFF07 => {
-                let last_bit = self.last_bit;
-                self.last_bit &= (val & 0b100) >> 2;
-                self.inc_tima(last_bit, self.last_bit);
-                self.tac = val;
-            }
-            _ => unreachable!("Invalid address for Timer"),
-        }
-    }
-
-    fn inc_tima(&mut self, before: u8, after: u8) {
-        if (before == 1) && (after == 0) {
-            self.tima = self.tima.wrapping_add(1);
-
-            if self.tima == 0 {
-                self.is_interrupt_scheduled = true;
-            }
-        }
-    }
-
-    fn set_sysclock(&mut self, val: u16) {
-        self.sysclock = val;
-
-        let watched_bit = match self.tac & 0b11 {
-            0b00 => (self.sysclock >> 7) & 1,
-            0b01 => (self.sysclock >> 1) & 1,
-            0b10 => (self.sysclock >> 3) & 1,
-            0b11 => (self.sysclock >> 5) & 1,
-            _ => 0,
-        } as u8;
-
-        let new_bit = watched_bit & ((self.tac & 0b100) >> 2);
-
-        self.inc_tima(self.last_bit, new_bit);
-        self.last_bit = new_bit;
-    }
-
-    fn tick(&mut self, interrupts: &mut Interrupts) {
-        self.is_tima_reloading = false;
-
-        if self.is_interrupt_scheduled {
-            interrupts.request_interrupt(Interrupt::Timer);
-            self.tima = self.tma;
-            self.is_interrupt_scheduled = false;
-            self.is_tima_reloading = true;
-        }
-
-        self.set_sysclock(self.sysclock.wrapping_add(1));
-    }
-}
-
-pub struct Interrupts {
-    pub interrupt_enable: u8,
-    pub interrupt_flag: u8,
-}
-
-impl Interrupts {
-    pub fn new() -> Interrupts {
-        Interrupts {
-            interrupt_enable: 0,
-            interrupt_flag: 0xE1,
-        }
-    }
-
-    fn get_enabled_interrupt(&mut self) -> Option<Interrupt> {
-        if is_bit_set(self.interrupt_enable, 0) && is_bit_set(self.interrupt_flag, 0) {
-            self.interrupt_flag &= 0b11111110;
-            Some(Interrupt::VBlank)
-        } else if is_bit_set(self.interrupt_enable, 1) && is_bit_set(self.interrupt_flag, 1) {
-            self.interrupt_flag &= 0b11111101;
-            Some(Interrupt::LCD)
-        } else if is_bit_set(self.interrupt_enable, 2) && is_bit_set(self.interrupt_flag, 2) {
-            self.interrupt_flag &= 0b11111011;
-            Some(Interrupt::Timer)
-        } else if is_bit_set(self.interrupt_enable, 3) && is_bit_set(self.interrupt_flag, 3) {
-            self.interrupt_flag &= 0b11110111;
-            Some(Interrupt::Serial)
-        } else if is_bit_set(self.interrupt_enable, 4) && is_bit_set(self.interrupt_flag, 4) {
-            self.interrupt_flag &= 0b11101111;
-            Some(Interrupt::Joypad)
-        } else {
-            None
-        }
-    }
-
-    pub fn request_interrupt(&mut self, interrupt: Interrupt) {
-        match interrupt {
-            Interrupt::VBlank => self.interrupt_flag |= 1,
-            Interrupt::LCD => self.interrupt_flag |= 1 << 1,
-            Interrupt::Timer => self.interrupt_flag |= 1 << 2,
-            Interrupt::Serial => self.interrupt_flag |= 1 << 3,
-            Interrupt::Joypad => self.interrupt_flag |= 1 << 4,
-        }
-    }
-
-    fn is_pending(&self) -> bool {
-        (self.interrupt_enable & self.interrupt_flag) != 0
-    }
-}
-
 pub struct CPU {
     registers: Registers,
     memory: Memory,
@@ -277,29 +12,10 @@ pub struct CPU {
     interrupts: Interrupts,
     ime: IME,
     is_halted: bool,
-}
-
-impl fmt::Debug for CPU {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}",
-            self.registers.a,
-            self.registers.get_f_as_u8(),
-            self.registers.b,
-            self.registers.c,
-            self.registers.d,
-            self.registers.e,
-            self.registers.h,
-            self.registers.l,
-            self.registers.sp,
-            self.registers.pc,
-            self.read_byte(self.registers.pc),
-            self.read_byte(self.registers.pc + 1),
-            self.read_byte(self.registers.pc + 2),
-            self.read_byte(self.registers.pc + 3),
-        )
-    }
+    next_addr: u16,
+    debugged: bool,
+    watched_val: u8,
+    watched_addr: u16,
 }
 
 impl CPU {
@@ -313,10 +29,96 @@ impl CPU {
             interrupts: Interrupts::new(),
             ime: IME::new(),
             is_halted: false,
+            debugged: false,
+            next_addr: 0x69,
+            watched_val: 0x69,
+            watched_addr: 0x69,
         }
     }
 
-    fn get_instr(&self) -> Instruction {
+    fn debug_read(&self, address: u16) -> u8 {
+        match address {
+            0x0 => (self.timer.sysclock & 0xFF) as u8,
+            0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
+                self.ppu.read_byte(address)
+            }
+            0xFF04..=0xFF07 => self.timer.read_byte(address),
+            0xFF0F => self.interrupts.interrupt_flag,
+            0xFFFF => self.interrupts.interrupt_enable,
+            _ => self.memory.read_byte(address),
+        }
+    }
+
+    pub fn debug(&mut self) {
+        let val = self.debug_read(self.watched_addr);
+
+        if !self.debugged || self.registers.pc == self.next_addr || val == self.watched_val {
+            if self.registers.pc == self.next_addr {
+                println!("At address {:04X}", self.next_addr);
+            } else if val == self.watched_val {
+                println!("Value at address {:04X} = {:02X}", self.watched_addr, val)
+            }
+
+            println!(
+                "BC={:04X} DE={:04X} HL={:04X} AF={:04X} SP={:04X} PC={:04X}, PCMEM={:02X} LCDC={:02X}",
+                self.registers.get_bc(),
+                self.registers.get_de(),
+                self.registers.get_hl(),
+                self.registers.get_af(),
+                self.registers.sp,
+                self.registers.pc,
+                self.memory.read_byte(self.registers.pc),
+                self.ppu.read_byte(0xFF40),
+            );
+
+            self.debugged = true;
+            println!("Enter next address to go to or inspect");
+
+            loop {
+                let mut input = String::new();
+                std::io::stdin()
+                    .read_line(&mut input)
+                    .expect("Failed to read command");
+
+                let (command, addr_str) = input.trim().split_at(1);
+
+                if command == "g" {
+                    let addr = u16::from_str_radix(addr_str, 16).unwrap();
+                    self.next_addr = addr;
+                    break;
+                } else if command == "m" {
+                    let address = u16::from_str_radix(addr_str, 16).unwrap();
+                    let val = self.debug_read(address);
+                    println!(
+                        "Value at address {:04X} is {:08b} or {:02X}",
+                        address, val, val
+                    );
+                } else if command == "w" {
+                    let address = u16::from_str_radix(addr_str, 16).unwrap();
+                    self.watched_addr = address;
+
+                    println!("Enter the value to watch for:");
+
+                    let mut input = String::new();
+
+                    std::io::stdin()
+                        .read_line(&mut input)
+                        .expect("Failed to read command");
+
+                    let val = u16::from_str_radix(input.trim(), 16).unwrap() as u8;
+
+                    self.watched_val = val;
+                    break;
+                } else {
+                    println!(
+                        "Invalid command, use g to go to address and m to view value at address"
+                    );
+                }
+            }
+        }
+    }
+
+    fn get_instr(&mut self) -> Instruction {
         let mut instruction_byte = self.read_byte(self.registers.pc);
         let prefixed = instruction_byte == 0xCB;
         if prefixed {
@@ -339,11 +141,10 @@ impl CPU {
 
         let InstrInfo {
             length: instr_length,
-            cycles: instr_cycles,
+            cycles: _instr_cycles,
         } = self.execute(instruction);
 
         self.registers.pc += instr_length;
-        self.tick(instr_cycles)
     }
 
     fn execute(&mut self, instruction: Instruction) -> InstrInfo {
@@ -416,8 +217,8 @@ impl CPU {
         }
     }
 
-    fn read_byte(&self, address: u16) -> u8 {
-        // self.tick(1);
+    fn read_byte(&mut self, address: u16) -> u8 {
+        self.tick(1);
 
         match address {
             0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
@@ -426,12 +227,13 @@ impl CPU {
             0xFF04..=0xFF07 => self.timer.read_byte(address),
             0xFF0F => self.interrupts.interrupt_flag,
             0xFFFF => self.interrupts.interrupt_enable,
+            0xFF00 => 0xFF, // Joypad
             _ => self.memory.read_byte(address),
         }
     }
 
     fn write_byte(&mut self, address: u16, val: u8) {
-        // self.tick(1);
+        self.tick(1);
 
         match address {
             0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
@@ -461,6 +263,14 @@ impl CPU {
         }
     }
 
+    fn execute_interrupt(&mut self, addr: u16) {
+        self.tick(2);
+        self.push_to_stack(self.registers.pc);
+        self.registers.pc = addr;
+        self.tick(1);
+        self.ime.reset();
+    }
+
     fn handle_interrupts(&mut self) {
         if !self.ime.is_set() {
             return;
@@ -471,44 +281,19 @@ impl CPU {
         match interrupt {
             Some(i) => match i {
                 Interrupt::VBlank => {
-                    //         println!("DEBUG VBLANK INTERRUPT");
-                    let new_addr = 0x40;
-                    self.push_to_stack(self.registers.pc);
-                    self.registers.pc = new_addr;
-                    self.ime.reset();
-                    self.tick(5)
+                    self.execute_interrupt(0x40);
                 }
                 Interrupt::LCD => {
-                    //         println!("DEBUG LCD INTERRUPT");
-                    let new_addr = 0x48;
-                    self.push_to_stack(self.registers.pc);
-                    self.registers.pc = new_addr;
-                    self.ime.reset();
-                    self.tick(5)
+                    self.execute_interrupt(0x48);
                 }
                 Interrupt::Timer => {
-                    //         println!("DEBUG TIMER INTERRUPT");
-                    let new_addr = 0x50;
-                    self.push_to_stack(self.registers.pc);
-                    self.registers.pc = new_addr;
-                    self.ime.reset();
-                    self.tick(5)
+                    self.execute_interrupt(0x50);
                 }
                 Interrupt::Serial => {
-                    //         println!("DEBUG SERIAL INTERRUPT");
-                    let new_addr = 0x58;
-                    self.push_to_stack(self.registers.pc);
-                    self.registers.pc = new_addr;
-                    self.ime.reset();
-                    self.tick(5)
+                    self.execute_interrupt(0x58);
                 }
                 Interrupt::Joypad => {
-                    //         println!("DEBUG JOYPAD INTERRUPT");
-                    let new_addr = 0x60;
-                    self.push_to_stack(self.registers.pc);
-                    self.registers.pc = new_addr;
-                    self.ime.reset();
-                    self.tick(5)
+                    self.execute_interrupt(0x60);
                 }
             },
             None => {}
@@ -516,17 +301,17 @@ impl CPU {
     }
 
     // Helper functions
-    fn get_imm8(&self) -> u8 {
+    fn get_imm8(&mut self) -> u8 {
         self.read_byte(self.registers.pc + 1)
     }
 
-    fn get_imm16(&self) -> u16 {
+    fn get_imm16(&mut self) -> u16 {
         let lower = self.read_byte(self.registers.pc + 1) as u16;
         let upper = self.read_byte(self.registers.pc + 2) as u16;
         upper << 8 | lower
     }
 
-    fn get_register_val(&self, reg: R8) -> u8 {
+    fn get_register_val(&mut self, reg: R8) -> u8 {
         use R8::*;
 
         match reg {
@@ -817,15 +602,12 @@ impl CPU {
             }
             // LD r8, r8
             (Dest::Register(dest_reg), Source::Register(src_reg)) => {
-                let cycles =
-                    if matches!(dest_reg, R8::IndirectHL) || matches!(src_reg, R8::IndirectHL) {
-                        8
-                    } else {
-                        4
-                    };
                 let src_val = self.get_register_val(src_reg);
                 self.set_register(dest_reg, src_val);
-                InstrInfo { length: 1, cycles }
+                InstrInfo {
+                    length: 1,
+                    cycles: 1,
+                }
             }
             // LD [imm16], A
             (Dest::Indirect(Addr::Imm16), Source::A) => {
@@ -852,6 +634,7 @@ impl CPU {
                 let (sum, flags) = CPU::add_u16_i8(sp_val, signed_offset);
                 self.set_register_pair(R16::HL, sum);
                 self.set_flags(flags);
+                self.tick(1);
                 InstrInfo {
                     length: 2,
                     cycles: 3,
@@ -861,6 +644,7 @@ impl CPU {
             (Dest::RegisterPair(R16::SP), Source::RegisterPair(R16::HL)) => {
                 let src_val = self.get_register_pair_val(R16::HL);
                 self.set_register_pair(R16::SP, src_val);
+                self.tick(1);
                 InstrInfo {
                     length: 1,
                     cycles: 2,
@@ -923,6 +707,7 @@ impl CPU {
                 let (sum, flags) = CPU::add_u16(hl_val, reg_val);
                 self.set_flags(flags);
                 self.set_register_pair(R16::HL, sum);
+                self.tick(1);
                 InstrInfo {
                     length: 1,
                     cycles: 2,
@@ -954,6 +739,7 @@ impl CPU {
                 let (sum, flags) = CPU::add_u16_i8(sp_val, signed_offset);
                 self.set_flags(flags);
                 self.set_register_pair(R16::SP, sum);
+                self.tick(2);
                 InstrInfo {
                     length: 2,
                     cycles: 4,
@@ -1179,6 +965,8 @@ impl CPU {
                 let reg_val = self.get_register_pair_val(reg);
                 let result = reg_val.wrapping_add(1);
                 self.set_register_pair(reg, result);
+
+                self.tick(1);
                 InstrInfo {
                     length: 1,
                     cycles: 2,
@@ -1207,6 +995,8 @@ impl CPU {
                 let reg_val = self.get_register_pair_val(reg);
                 let result = reg_val.wrapping_sub(1);
                 self.set_register_pair(reg, result);
+
+                self.tick(1);
                 InstrInfo {
                     length: 1,
                     cycles: 2,
@@ -1338,7 +1128,8 @@ impl CPU {
     }
 
     fn cpl(&mut self) -> InstrInfo {
-        self.set_register(R8::A, !self.get_register_val(R8::A));
+        let reg_val = self.get_register_val(R8::A);
+        self.set_register(R8::A, !reg_val);
         self.set_flags(Flags {
             zero: None,
             subtract: Some(true),
@@ -1533,6 +1324,7 @@ impl CPU {
                     half_carry: Some(false),
                     carry: Some((reg_val & 1) == 1),
                 });
+
                 InstrInfo { length: 2, cycles }
             }
 
@@ -1551,6 +1343,7 @@ impl CPU {
                     half_carry: Some(true),
                     carry: None,
                 });
+
                 InstrInfo { length: 2, cycles }
             }
 
@@ -1589,6 +1382,8 @@ impl CPU {
             JumpTarget::Imm16 => {
                 let addr = self.get_imm16();
                 self.registers.pc = addr;
+
+                self.tick(1);
                 InstrInfo {
                     length: 0, // To prevent moving PC after jump, actual is 3
                     cycles: 4,
@@ -1609,11 +1404,15 @@ impl CPU {
         if self.is_cond_true(cond) {
             let addr = self.get_imm16();
             self.registers.pc = addr;
+
+            self.tick(1);
             InstrInfo {
                 length: 0, // To prevent moving PC after jump, actual is 3
                 cycles: 4,
             }
         } else {
+            self.tick(2);
+
             InstrInfo {
                 length: 3,
                 cycles: 3,
@@ -1625,6 +1424,8 @@ impl CPU {
         let signed_offset = self.get_imm8() as i8;
         let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
         self.registers.pc = addr + 2; // Jump from PC addr after this instruction (2 bytes later)
+
+        self.tick(1);
         InstrInfo {
             length: 0,
             cycles: 3,
@@ -1636,11 +1437,14 @@ impl CPU {
             let signed_offset = self.get_imm8() as i8;
             let (addr, _) = CPU::add_u16_i8(self.registers.pc, signed_offset);
             self.registers.pc = addr + 2; // Jump from PC addr after this instruction (2 bytes later)
+
+            self.tick(1);
             InstrInfo {
                 length: 0,
                 cycles: 3,
             }
         } else {
+            self.tick(1);
             InstrInfo {
                 length: 2,
                 cycles: 2,
@@ -1653,6 +1457,8 @@ impl CPU {
         let curr_addr = self.registers.pc + 3;
         self.push_to_stack(curr_addr);
         self.registers.pc = new_addr;
+
+        self.tick(1);
 
         InstrInfo {
             length: 0,
@@ -1667,14 +1473,18 @@ impl CPU {
             self.push_to_stack(curr_addr);
             self.registers.pc = new_addr;
 
+            self.tick(1);
+
             InstrInfo {
                 length: 0,
                 cycles: 6,
             }
         } else {
+            self.tick(2);
+
             InstrInfo {
                 length: 3,
-                cycles: 6,
+                cycles: 3,
             }
         }
     }
@@ -1682,6 +1492,8 @@ impl CPU {
     fn ret(&mut self) -> InstrInfo {
         let addr = self.pop_from_stack();
         self.registers.pc = addr;
+
+        self.tick(1);
 
         InstrInfo {
             length: 0,
@@ -1699,11 +1511,15 @@ impl CPU {
             let addr = self.pop_from_stack();
             self.registers.pc = addr;
 
+            self.tick(2);
+
             InstrInfo {
                 length: 0,
                 cycles: 5,
             }
         } else {
+            self.tick(1);
+
             InstrInfo {
                 length: 1,
                 cycles: 2,
@@ -1715,6 +1531,8 @@ impl CPU {
         let curr_addr = self.registers.pc + 1;
         self.push_to_stack(curr_addr);
         self.registers.pc = tgt as u16;
+
+        self.tick(1);
 
         InstrInfo {
             length: 0,
@@ -1734,6 +1552,9 @@ impl CPU {
     fn push(&mut self, reg: R16) -> InstrInfo {
         let reg_val = self.get_register_pair_val(reg);
         self.push_to_stack(reg_val);
+
+        self.tick(1);
+
         InstrInfo {
             length: 1,
             cycles: 4,
@@ -1749,10 +1570,274 @@ impl CPU {
     }
 
     fn ei(&mut self) -> InstrInfo {
-        self.ime.schedule(); // TODO: delay the interrupt enable by one cycle
+        self.ime.schedule();
         InstrInfo {
             length: 1,
             cycles: 1,
         }
+    }
+}
+type Cycles = u16;
+
+struct InstrInfo {
+    length: u16,
+    cycles: Cycles,
+}
+
+pub enum Interrupt {
+    VBlank,
+    LCD,
+    Timer,
+    Serial,
+    Joypad,
+}
+
+pub fn is_bit_set(val: u8, bit_index: u8) -> bool {
+    (val & (1 << bit_index)) != 0
+}
+
+pub fn set_bit(val: u8, bit_index: u8) -> u8 {
+    val | (1 << bit_index)
+}
+
+pub fn reset_bit(val: u8, bit_index: u8) -> u8 {
+    val & !(1 << bit_index)
+}
+
+struct Memory {
+    memory: [u8; 0xFFFF],
+}
+
+impl fmt::Debug for Memory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Memory")
+            .field("length", &self.memory.len())
+            .finish()
+    }
+}
+
+impl Memory {
+    fn new(rom: [u8; 0xFFFF]) -> Memory {
+        Memory { memory: rom }
+    }
+
+    fn read_byte(&self, address: u16) -> u8 {
+        if address == 0xFF44 {
+            return 0x90;
+        } else {
+            self.memory[address as usize]
+        }
+    }
+
+    fn write_byte(&mut self, address: u16, val: u8) {
+        if address < 0xFFFF {
+            self.memory[address as usize] = val
+        } else {
+            panic!("Invalid memory address {:04X}", address)
+        }
+    }
+
+    fn get_dma_oam(&self, start_addr: u16) -> [u8; 0xA0] {
+        let start = start_addr as usize;
+        let end = start + 0x9F;
+
+        let mut oam = [0u8; 0xA0];
+
+        oam.copy_from_slice(&self.memory[start..=end]);
+
+        oam
+    }
+}
+
+pub struct Flags {
+    pub zero: Option<bool>,
+    pub subtract: Option<bool>,
+    pub half_carry: Option<bool>,
+    pub carry: Option<bool>,
+}
+
+struct IME {
+    is_set: bool,
+    is_scheduled: bool,
+}
+
+impl IME {
+    pub fn new() -> IME {
+        IME {
+            is_set: false,
+            is_scheduled: false,
+        }
+    }
+
+    pub fn schedule(&mut self) {
+        self.is_scheduled = true;
+    }
+
+    pub fn reset(&mut self) {
+        self.is_set = false;
+        self.is_scheduled = false;
+    }
+
+    pub fn set_if_scheduled(&mut self) {
+        if self.is_scheduled {
+            self.is_set = true;
+            self.is_scheduled = false;
+        }
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.is_set
+    }
+}
+
+#[derive(Debug)]
+struct Timer {
+    sysclock: u16, // FF04, Div (upper 8 bits)
+    tima: u8,      // FF05, Timer Counter
+    tma: u8,       // FF06, Timer Modulo
+    tac: u8,       // FF07, Timer Control
+    is_tima_reloading: bool,
+    is_interrupt_scheduled: bool,
+    last_bit: u8,
+}
+
+impl Timer {
+    pub fn new() -> Timer {
+        Timer {
+            sysclock: 0xAB << 6 | 0b1111110000,
+            tima: 0,
+            tma: 0,
+            tac: 0xF8,
+            is_tima_reloading: false,
+            is_interrupt_scheduled: false,
+            last_bit: 0,
+        }
+    }
+
+    fn read_byte(&self, address: u16) -> u8 {
+        match address {
+            0xFF04 => ((self.sysclock >> 6) & 0xFF) as u8,
+            0xFF05 => self.tima,
+            0xFF06 => self.tma,
+            0xFF07 => self.tac,
+            _ => unreachable!("Invalid address for Timer"),
+        }
+    }
+
+    fn write_byte(&mut self, address: u16, val: u8) {
+        match address {
+            0xFF04 => self.set_sysclock(0),
+            0xFF05 => {
+                if !self.is_tima_reloading {
+                    self.tima = val;
+                }
+
+                if self.is_interrupt_scheduled {
+                    self.is_interrupt_scheduled = false;
+                }
+            }
+            0xFF06 => {
+                if self.is_tima_reloading {
+                    self.tima = val
+                }
+                self.tma = val;
+            }
+            0xFF07 => {
+                let last_bit = self.last_bit;
+                self.last_bit &= (val & 0b100) >> 2;
+                self.inc_tima(last_bit, self.last_bit);
+                self.tac = val;
+            }
+            _ => unreachable!("Invalid address for Timer"),
+        }
+    }
+
+    fn inc_tima(&mut self, before: u8, after: u8) {
+        if (before == 1) && (after == 0) {
+            self.tima = self.tima.wrapping_add(1);
+
+            if self.tima == 0 {
+                self.is_interrupt_scheduled = true;
+            }
+        }
+    }
+
+    fn set_sysclock(&mut self, val: u16) {
+        self.sysclock = val;
+
+        let watched_bit = match self.tac & 0b11 {
+            0b00 => (self.sysclock >> 7) & 1,
+            0b01 => (self.sysclock >> 1) & 1,
+            0b10 => (self.sysclock >> 3) & 1,
+            0b11 => (self.sysclock >> 5) & 1,
+            _ => unreachable!(),
+        } as u8;
+
+        let new_bit = watched_bit & ((self.tac & 0b100) >> 2);
+
+        self.inc_tima(self.last_bit, new_bit);
+        self.last_bit = new_bit;
+    }
+
+    fn tick(&mut self, interrupts: &mut Interrupts) {
+        self.is_tima_reloading = false;
+
+        if self.is_interrupt_scheduled {
+            interrupts.request_interrupt(Interrupt::Timer);
+            self.tima = self.tma;
+            self.is_interrupt_scheduled = false;
+            self.is_tima_reloading = true;
+        }
+
+        self.set_sysclock(self.sysclock.wrapping_add(1));
+    }
+}
+
+pub struct Interrupts {
+    pub interrupt_enable: u8,
+    pub interrupt_flag: u8,
+}
+
+impl Interrupts {
+    pub fn new() -> Interrupts {
+        Interrupts {
+            interrupt_enable: 0,
+            interrupt_flag: 0xE1,
+        }
+    }
+
+    fn get_enabled_interrupt(&mut self) -> Option<Interrupt> {
+        if is_bit_set(self.interrupt_enable, 0) && is_bit_set(self.interrupt_flag, 0) {
+            self.interrupt_flag &= 0b11111110;
+            Some(Interrupt::VBlank)
+        } else if is_bit_set(self.interrupt_enable, 1) && is_bit_set(self.interrupt_flag, 1) {
+            self.interrupt_flag &= 0b11111101;
+            Some(Interrupt::LCD)
+        } else if is_bit_set(self.interrupt_enable, 2) && is_bit_set(self.interrupt_flag, 2) {
+            self.interrupt_flag &= 0b11111011;
+            Some(Interrupt::Timer)
+        } else if is_bit_set(self.interrupt_enable, 3) && is_bit_set(self.interrupt_flag, 3) {
+            self.interrupt_flag &= 0b11110111;
+            Some(Interrupt::Serial)
+        } else if is_bit_set(self.interrupt_enable, 4) && is_bit_set(self.interrupt_flag, 4) {
+            self.interrupt_flag &= 0b11101111;
+            Some(Interrupt::Joypad)
+        } else {
+            None
+        }
+    }
+
+    pub fn request_interrupt(&mut self, interrupt: Interrupt) {
+        match interrupt {
+            Interrupt::VBlank => self.interrupt_flag |= 1,
+            Interrupt::LCD => self.interrupt_flag |= 1 << 1,
+            Interrupt::Timer => self.interrupt_flag |= 1 << 2,
+            Interrupt::Serial => self.interrupt_flag |= 1 << 3,
+            Interrupt::Joypad => self.interrupt_flag |= 1 << 4,
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        (self.interrupt_enable & self.interrupt_flag) != 0
     }
 }

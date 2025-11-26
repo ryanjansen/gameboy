@@ -18,21 +18,27 @@ pub struct Yarboy {
     window: Option<&'static Window>,
     pixels: Option<Pixels<'static>>,
     last_frame: Instant,
+    is_debug: bool,
 }
 
 impl Yarboy {
-    pub fn new(rom: [u8; 0xFFFF]) -> Yarboy {
+    pub fn new(rom: [u8; 0xFFFF], is_debug: bool) -> Yarboy {
         Yarboy {
             cpu: CPU::new(rom),
             window: None,
             pixels: None,
             last_frame: Instant::now(),
+            is_debug,
         }
     }
 
     fn render(&mut self) {
         if let Some(pixels) = &mut self.pixels {
             while !self.cpu.ppu.is_ready_to_render() {
+                if self.is_debug {
+                    self.cpu.debug();
+                }
+
                 self.cpu.step();
             }
 
@@ -53,7 +59,8 @@ impl ApplicationHandler for Yarboy {
             let window_attributes = Window::default_attributes()
                 .with_title("yarboy")
                 .with_inner_size(size)
-                .with_min_inner_size(size);
+                .with_min_inner_size(size)
+                .with_max_inner_size(size);
 
             event_loop.create_window(window_attributes).unwrap()
         };

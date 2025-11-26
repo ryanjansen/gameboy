@@ -21,7 +21,17 @@ fn main() -> std::result::Result<(), Error> {
     let mut rom = read_rom(path)?;
     rom[0xFF80..=0xFFFE].fill(0xFF);
 
-    let mut yarboy: Yarboy = Yarboy::new(rom);
+    let command = std::env::args().nth(2);
+
+    let is_debug = match command {
+        Some(string) => match string.as_str() {
+            "debug" => true,
+            _ => false,
+        },
+        None => false,
+    };
+
+    let mut yarboy: Yarboy = Yarboy::new(rom, is_debug);
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);

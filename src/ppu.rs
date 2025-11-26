@@ -20,7 +20,7 @@ const HEIGHT: u32 = 144;
 const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 const LIGHT_GRAY: [u8; 4] = [0xA9, 0xA9, 0xA9, 0xFF];
 const DARK_GRAY: [u8; 4] = [0x54, 0x54, 0x54, 0xFF];
-const BLACK: [u8; 4] = [0x00, 0x00, 0x54, 0xFF];
+const BLACK: [u8; 4] = [0x00, 0x00, 0x00, 0xFF];
 
 pub struct PPU {
     vram: [u8; 8192], // 0x8000 - 0x9FFF
@@ -35,11 +35,12 @@ pub struct PPU {
     bgp: u8,
     obp0: u8,
     obp1: u8,
-    mode: Mode,
+    pub mode: Mode,
     clock: u16, // In dots (t-cycles)
-    line: u8,
+    pub line: u8,
     buffer: [u8; (WIDTH * HEIGHT * 4) as usize],
     is_ready_to_render: bool,
+    debug_clock: usize,
 }
 
 impl PPU {
@@ -57,11 +58,12 @@ impl PPU {
             bgp: 0xFC,
             obp0: 0,
             obp1: 0,
-            mode: Mode::VBlank,
-            clock: 0,
-            line: 0x91,
+            mode: Mode::Drawing,
+            clock: 80,
+            line: 0,
             buffer: [0u8; (WIDTH * HEIGHT * 4) as usize],
             is_ready_to_render: true,
+            debug_clock: 0,
         }
     }
 
@@ -72,6 +74,7 @@ impl PPU {
     // Tick by one M-Cycle = 4 Dots
     pub fn tick(&mut self, interrupt_handler: &mut Interrupts) {
         self.clock += 4;
+        self.debug_clock += 1;
 
         match self.mode {
             Mode::OAMScan => {
@@ -93,7 +96,7 @@ impl PPU {
                     self.clock = 0;
                     self.line += 1;
 
-                    if self.line == 143 {
+                    if self.line == 144 {
                         self.mode = Mode::VBlank;
                         interrupt_handler.request_interrupt(Interrupt::VBlank);
                     } else {
@@ -106,9 +109,8 @@ impl PPU {
                     self.clock = 0;
                     self.line += 1;
 
-                    self.is_ready_to_render = true;
-
                     if self.line > 153 {
+                        self.is_ready_to_render = true;
                         self.mode = Mode::OAMScan;
                         self.line = 0;
                     }
@@ -229,9 +231,11 @@ impl PPU {
     pub fn write_byte(&mut self, address: u16, val: u8) {
         match address {
             0x8000..=0x9FFF => {
-                if self.is_vram_accessible() {
-                    self.vram[(address - 0x8000) as usize] = val
-                }
+                // println!(
+                //     "WRITING TO VRAM, CLOCK: {}, LINE: {}, MODE: {:?}, ADDRESS: {:04X}, VALUE: {}",
+                //     self.debug_clock, self.line, self.mode, address, val
+                // );
+                self.vram[(address - 0x8000) as usize] = val
             }
             0xFE00..=0xFE9F => {
                 if self.is_oam_accessible() {
@@ -272,7 +276,7 @@ impl PPU {
         let mut palette = Vec::new();
 
         for i in 0..4 {
-            match val >> (i * 2) & 0x03 {
+            match (val >> (i * 2)) & 0x03 {
                 0 => palette.push(WHITE),
                 1 => palette.push(LIGHT_GRAY),
                 2 => palette.push(DARK_GRAY),
@@ -345,19 +349,24 @@ impl PPU {
             let tile_row_1 = self.read_vram(tile_row_addr);
             let tile_row_2 = self.read_vram(tile_row_addr + 1);
 
-            let pixel_x = bg_x & 0b111;
+            let pixel_x = 7 - (bg_x & 0b111);
 
             let msb = ((tile_row_2 >> pixel_x) & 1) << 1;
             let lsb = (tile_row_1 >> pixel_x) & 1;
 
-            let color_id = ((tile_row_1 >> pixel_x) & 1) | ((tile_row_2 >> pixel_x & 1) << 1);
-            if tile_id == 48 {
-                println!("TILE 48 ROW Byte 1 {:08b}", tile_row_1);
-                println!("TILE 48 ROW Byte 2 {:08b}", tile_row_2);
-                println!("TILE MSB: {:02b}", msb);
-                println!("TILE LSB: {:02b}", lsb);
-                println!("TILE Color ID: {:02b}", color_id);
-            }
+            let color_id = msb | lsb;
+
+            // println!("TILE_ADDR: {:04X}", tile_addr);
+            // println!("TILE_ID: {:02X}", tile_id);
+            // println!("ROW NUMBER: {}", bg_y & 0x07);
+            // println!("Row Address: {:04X}", tile_row_addr);
+            // println!("X: {}", pixel_x);
+            // println!("TILE 48 ROW Byte 1 {:08b}", tile_row_1);
+            // println!("TILE 48 ROW Byte 2 {:08b}", tile_row_2);
+            // println!("TILE MSB: {:02b}", msb);
+            // println!("TILE LSB: {:02b}", lsb);
+            // println!("TILE Color ID: {:02b}", color_id);
+            // println!();
 
             let palette = self.get_palette(self.bgp);
 
@@ -389,7 +398,8 @@ impl PPU {
     fn draw_sprite(&self, screen_y: u8, sprite: Sprite, scanline: &mut [u8], bg_color_ids: &[u8]) {
         let is_large_size = is_bit_set(self.lcdc, 2);
 
-        let mut sprite_row = if is_large_size { 15 } else { 7 } - (sprite.y - screen_y) as u16;
+        let mut sprite_row = (if is_large_size { 15_u8 } else { 7_u8 })
+            .wrapping_sub(sprite.y.wrapping_sub(screen_y)) as u16;
 
         if sprite.y_flip {
             sprite_row = if is_large_size { 15 } else { 7 } - sprite_row;
@@ -418,7 +428,7 @@ impl PPU {
 
             let mut pixel_num = screen_x & 0b111;
 
-            if sprite.x_flip {
+            if !sprite.x_flip {
                 pixel_num = 7 - pixel_num;
             }
 
@@ -454,11 +464,11 @@ impl PPU {
 
             if is_bit_set(self.lcdc, 2) {
                 // 8 x 16 size
-                if y >= sprite_y - 16 && y <= sprite_y {
+                if y >= sprite_y.saturating_sub(16) && y <= sprite_y {
                     sprites.push(Sprite::new(sprite_bytes, idx as u8));
                 }
             } else {
-                if y >= sprite_y - 16 && y <= sprite_y - 8 {
+                if y >= sprite_y.saturating_sub(16) && y <= sprite_y.saturating_sub(8) {
                     sprites.push(Sprite::new(sprite_bytes, idx as u8));
                 }
             }
@@ -503,7 +513,7 @@ impl Sprite {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Mode {
+pub enum Mode {
     OAMScan = 2, // Mode 2
     Drawing = 3, // Mode 3
     HBlank = 0,  // Mode 0

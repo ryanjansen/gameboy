@@ -57,10 +57,6 @@ impl Registers {
         self.f = FlagsRegister::from((value & 0xFF) as u8);
     }
 
-    pub fn get_f_as_u8(&self) -> u8 {
-        u8::from(&self.f)
-    }
-
     pub fn get_de(&self) -> u16 {
         (self.d as u16) << 8 | self.e as u16
     }

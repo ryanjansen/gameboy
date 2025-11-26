@@ -417,7 +417,7 @@ impl fmt::Debug for Addr {
         match self {
             RegisterPair(reg) => write!(f, "{:?}", reg),
             Imm16 => write!(f, "imm16"),
-            Imm8WithIo => write!(f, "imm16 + 0xFF00"),
+            Imm8WithIo => write!(f, "imm8 + 0xFF00"),
             CWithIo => write!(f, "C + 0xFF00"),
         }
     }
