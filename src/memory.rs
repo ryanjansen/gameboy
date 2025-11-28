@@ -17,7 +17,7 @@ impl fmt::Debug for Memory {
 }
 
 impl Memory {
-    pub fn new(rom: [u8; 0xFFFF]) -> Memory {
+    pub fn new(rom: Vec<u8>) -> Memory {
         let cartridge = Memory::load_cartridge(rom);
 
         Memory {
@@ -50,13 +50,13 @@ impl Memory {
         oam
     }
 
-    fn load_cartridge(buffer: [u8; 0xFFFF]) -> Box<dyn MemoryBus> {
+    fn load_cartridge(buffer: Vec<u8>) -> Box<dyn MemoryBus> {
         match buffer[0x147] {
-            0x00 => Box::new(ROM::new(buffer.to_vec())),
-            0x01 => Box::new(MBC1::new(buffer.to_vec(), 0)),
+            0x00 => Box::new(ROM::new(buffer)),
+            0x01 => Box::new(MBC1::new(buffer, 0)),
             0x02 => {
                 let ram_size = Memory::get_ram_size(buffer[0x149]);
-                Box::new(MBC1::new(buffer.to_vec(), ram_size))
+                Box::new(MBC1::new(buffer, ram_size))
             }
             _ => panic!("INVALID CARTRIDGE TYPE"),
         }

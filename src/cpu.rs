@@ -24,7 +24,7 @@ pub struct CPU {
 
 impl CPU {
     // TODO: Add sound, mbc
-    pub fn new(rom: [u8; 0xFFFF]) -> CPU {
+    pub fn new(rom: Vec<u8>) -> CPU {
         CPU {
             registers: Registers::new(),
             memory: Memory::new(rom),

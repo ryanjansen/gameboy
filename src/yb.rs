@@ -25,7 +25,7 @@ pub struct Yarboy {
 }
 
 impl Yarboy {
-    pub fn new(rom: [u8; 0xFFFF], is_debug: bool) -> Yarboy {
+    pub fn new(rom: Vec<u8>, is_debug: bool) -> Yarboy {
         Yarboy {
             cpu: CPU::new(rom),
             window: None,
