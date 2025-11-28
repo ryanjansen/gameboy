@@ -290,7 +290,7 @@ impl PPU {
 
     fn get_tile_address(&self, tile_id: u8, is_win_or_bg: bool) -> u16 {
         if is_win_or_bg && ((self.lcdc & 1 << 4) == 0) {
-            (0x9000_u16.wrapping_add(tile_id as i8 as u16 * 16)) as u16 // TODO: is this accurate?
+            (0x9000_u16.wrapping_add((tile_id as i8 as u16).wrapping_mul(16))) as u16 // TODO: is this accurate?
         } else {
             0x8000 + 16 * tile_id as u16
         }
@@ -351,22 +351,7 @@ impl PPU {
 
             let pixel_x = 7 - (bg_x & 0b111);
 
-            let msb = ((tile_row_2 >> pixel_x) & 1) << 1;
-            let lsb = (tile_row_1 >> pixel_x) & 1;
-
-            let color_id = msb | lsb;
-
-            // println!("TILE_ADDR: {:04X}", tile_addr);
-            // println!("TILE_ID: {:02X}", tile_id);
-            // println!("ROW NUMBER: {}", bg_y & 0x07);
-            // println!("Row Address: {:04X}", tile_row_addr);
-            // println!("X: {}", pixel_x);
-            // println!("TILE 48 ROW Byte 1 {:08b}", tile_row_1);
-            // println!("TILE 48 ROW Byte 2 {:08b}", tile_row_2);
-            // println!("TILE MSB: {:02b}", msb);
-            // println!("TILE LSB: {:02b}", lsb);
-            // println!("TILE Color ID: {:02b}", color_id);
-            // println!();
+            let color_id = self.get_color_id(tile_row_1, tile_row_2, pixel_x);
 
             let palette = self.get_palette(self.bgp);
 
@@ -383,26 +368,24 @@ impl PPU {
             return;
         }
 
-        let y = self.line.wrapping_add(self.scy) & 255;
-
-        let sprites: Vec<Sprite> = self.get_sprites(y); // visible sprites sorted by x desc, oam desc
+        let sprites: Vec<Sprite> = self.get_sprites(self.line); // visible sprites sorted by x desc, oam desc
 
         for sprite in sprites {
-            self.draw_sprite(y, sprite, scanline, bg_color_ids);
+            self.draw_sprite(sprite, scanline, bg_color_ids);
         }
 
         // Scan OAM to find first 10 sprites that match y coordinate
         // Go through sprites and draw their lines if on screen
     }
 
-    fn draw_sprite(&self, screen_y: u8, sprite: Sprite, scanline: &mut [u8], bg_color_ids: &[u8]) {
+    fn draw_sprite(&self, sprite: Sprite, scanline: &mut [u8], bg_color_ids: &[u8]) {
         let is_large_size = is_bit_set(self.lcdc, 2);
 
         let mut sprite_row = (if is_large_size { 15_u8 } else { 7_u8 })
-            .wrapping_sub(sprite.y.wrapping_sub(screen_y)) as u16;
+            .wrapping_sub(sprite.y.wrapping_sub(self.line)) as u16;
 
         if sprite.y_flip {
-            sprite_row = if is_large_size { 15 } else { 7 } - sprite_row;
+            sprite_row = (if is_large_size { 15_u16 } else { 7_u16 }).wrapping_sub(sprite_row);
         }
 
         let tile_id = if is_large_size {
@@ -421,24 +404,28 @@ impl PPU {
         let tile_row_2 = self.read_vram(tile_row_addr + 1);
 
         let start_x = sprite.x.saturating_sub(8) as usize;
-        let end_x = if start_x + 8 > 159 { 159 } else { start_x + 8 };
+        let end_x = if start_x.saturating_add(8) > 159 {
+            159
+        } else {
+            start_x.saturating_add(8)
+        };
 
-        for (i, pixel) in scanline[start_x..end_x].chunks_exact_mut(4).enumerate() {
-            let screen_x = start_x + i;
+        let start_pixel = start_x.wrapping_mul(4);
+        let end_pixel = end_x.wrapping_mul(4);
 
-            let mut pixel_num = screen_x & 0b111;
+        for (i, pixel) in scanline[start_pixel..=end_pixel]
+            .chunks_exact_mut(4)
+            .enumerate()
+        {
+            let pixel_num = if sprite.x_flip { i } else { 7 - i };
 
-            if !sprite.x_flip {
-                pixel_num = 7 - pixel_num;
-            }
-
-            let color_id = ((tile_row_1 >> pixel_num) & 1) & ((tile_row_2 >> pixel_num & 1) << 1);
+            let color_id = self.get_color_id(tile_row_1, tile_row_2, pixel_num as u16);
 
             if color_id == 0 {
                 continue;
             }
 
-            let bg_color_id = bg_color_ids[screen_x];
+            let bg_color_id = bg_color_ids[start_x + i];
 
             if sprite.priority && bg_color_id != 0 {
                 continue;
@@ -482,6 +469,13 @@ impl PPU {
         visible_sprites.sort_by_key(|sprite| (sprite.x, sprite.oam_idx));
 
         return visible_sprites;
+    }
+
+    fn get_color_id(&self, tile_row_1: u8, tile_row_2: u8, x_idx: u16) -> u8 {
+        let msb = ((tile_row_2 >> x_idx) & 1) << 1;
+        let lsb = (tile_row_1 >> x_idx) & 1;
+
+        msb | lsb
     }
 }
 

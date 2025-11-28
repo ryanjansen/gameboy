@@ -1,11 +1,12 @@
-use crate::cpu::CPU;
+use crate::cpu::{CPU, JoypadKey};
 use pixels::{Pixels, SurfaceTexture};
 use std::time::{Duration, Instant};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{ElementState, KeyEvent, WindowEvent},
     event_loop::ActiveEventLoop,
+    keyboard::{Key, NamedKey},
     window::{Window, WindowId},
 };
 
@@ -86,6 +87,44 @@ impl ApplicationHandler for Yarboy {
             WindowEvent::RedrawRequested => {
                 self.render();
             }
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        logical_key: key,
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => match key.as_ref() {
+                Key::Character("w") => self.cpu.joypad.set_key_pressed(JoypadKey::Up),
+                Key::Character("a") => self.cpu.joypad.set_key_pressed(JoypadKey::Left),
+                Key::Character("s") => self.cpu.joypad.set_key_pressed(JoypadKey::Down),
+                Key::Character("d") => self.cpu.joypad.set_key_pressed(JoypadKey::Right),
+                Key::Character("j") => self.cpu.joypad.set_key_pressed(JoypadKey::A),
+                Key::Character("k") => self.cpu.joypad.set_key_pressed(JoypadKey::B),
+                Key::Named(NamedKey::Enter) => self.cpu.joypad.set_key_pressed(JoypadKey::Start),
+                Key::Character("p") => self.cpu.joypad.set_key_pressed(JoypadKey::Select),
+                _ => (),
+            },
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        logical_key: key,
+                        state: ElementState::Released,
+                        ..
+                    },
+                ..
+            } => match key.as_ref() {
+                Key::Character("w") => self.cpu.joypad.set_key_released(JoypadKey::Up),
+                Key::Character("a") => self.cpu.joypad.set_key_released(JoypadKey::Left),
+                Key::Character("s") => self.cpu.joypad.set_key_released(JoypadKey::Down),
+                Key::Character("d") => self.cpu.joypad.set_key_released(JoypadKey::Right),
+                Key::Character("j") => self.cpu.joypad.set_key_released(JoypadKey::A),
+                Key::Character("k") => self.cpu.joypad.set_key_released(JoypadKey::B),
+                Key::Named(NamedKey::Enter) => self.cpu.joypad.set_key_released(JoypadKey::Start),
+                Key::Character("p") => self.cpu.joypad.set_key_released(JoypadKey::Select),
+                _ => (),
+            },
             _ => {}
         }
     }
