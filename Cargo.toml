@@ -6,4 +6,3 @@ edition = "2024"
 [dependencies]
 pixels = "0.15.0"
 winit = "0.30.12"
-hex = "0.4.3"

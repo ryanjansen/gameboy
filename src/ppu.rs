@@ -381,8 +381,7 @@ impl PPU {
     fn draw_sprite(&self, sprite: Sprite, scanline: &mut [u8], bg_color_ids: &[u8]) {
         let is_large_size = is_bit_set(self.lcdc, 2);
 
-        let mut sprite_row = (if is_large_size { 15_u8 } else { 7_u8 })
-            .wrapping_sub(sprite.y.wrapping_sub(self.line)) as u16;
+        let mut sprite_row = 15_u16.wrapping_sub(sprite.y.wrapping_sub(self.line + 1) as u16);
 
         if sprite.y_flip {
             sprite_row = (if is_large_size { 15_u16 } else { 7_u16 }).wrapping_sub(sprite_row);
@@ -451,11 +450,11 @@ impl PPU {
 
             if is_bit_set(self.lcdc, 2) {
                 // 8 x 16 size
-                if y >= sprite_y.saturating_sub(16) && y <= sprite_y {
+                if y >= sprite_y.saturating_sub(16) && y <= sprite_y.saturating_sub(1) {
                     sprites.push(Sprite::new(sprite_bytes, idx as u8));
                 }
             } else {
-                if y >= sprite_y.saturating_sub(16) && y <= sprite_y.saturating_sub(8) {
+                if y >= sprite_y.saturating_sub(16) && y <= sprite_y.saturating_sub(9) {
                     sprites.push(Sprite::new(sprite_bytes, idx as u8));
                 }
             }

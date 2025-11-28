@@ -104,6 +104,7 @@ impl ApplicationHandler for Yarboy {
                 Key::Character("k") => self.cpu.joypad.set_key_pressed(JoypadKey::B),
                 Key::Named(NamedKey::Enter) => self.cpu.joypad.set_key_pressed(JoypadKey::Start),
                 Key::Character("p") => self.cpu.joypad.set_key_pressed(JoypadKey::Select),
+                Key::Named(NamedKey::Space) => self.cpu.debug(),
                 _ => (),
             },
             WindowEvent::KeyboardInput {

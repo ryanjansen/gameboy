@@ -212,7 +212,6 @@ impl CPU {
     }
 
     fn tick(&mut self, m_cycles: u16) {
-        // TODO: tick instructions correctly
         for _ in 0..m_cycles {
             self.timer.tick(&mut self.interrupts);
             self.ppu.tick(&mut self.interrupts);
