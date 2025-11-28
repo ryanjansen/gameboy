@@ -1,3 +1,5 @@
+use crate::memory::MemoryBus;
+
 #[derive(Default)]
 pub struct MBC1 {
     rom: Vec<u8>,
@@ -19,7 +21,9 @@ impl MBC1 {
             ..Default::default()
         }
     }
+}
 
+impl MemoryBus for MBC1 {
     fn read_byte(&self, address: u16) -> u8 {
         match address {
             0x0000..=0x3FFF => self.rom[address as usize],
