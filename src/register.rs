@@ -1,5 +1,3 @@
-use crate::cpu::Flags;
-
 #[derive(Debug)]
 pub struct Registers {
     pub a: u8,
@@ -98,6 +96,13 @@ struct FlagsRegister {
     subtract: bool,
     half_carry: bool,
     carry: bool,
+}
+
+pub struct Flags {
+    pub zero: Option<bool>,
+    pub subtract: Option<bool>,
+    pub half_carry: Option<bool>,
+    pub carry: Option<bool>,
 }
 
 const ZERO_FLAG_BYTE_POSITION: u8 = 7;

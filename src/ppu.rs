@@ -1,22 +1,9 @@
-// Tile Data: 0x8000 - 0x97FF
-// Tile Map 0: 0x9800 - 0x9BFF
-// Tile Map 1: 0x9C00 - 0x9FFF
-// DMA OAM Transfer: 0xFF46
-// LCD Control: 0xFF40
-// LCD Y Coordinate: 0xFF44
-// LY Compare: 0xFF45
-// LCD Status (STAT): 0xFF41
-// SCY Viewport Y Coordinate: 0xFF42
-// SCX Viewport X Coordinate: 0xFF43
-// WY Window Y Coordinate: 0xFF4A
-// WX Window X Coordinate: 0xFF4B
-// BG Palette: 0xFF47
-// Obj Palette 0: 0xFF48
-// Obj Palette 1: 0xFF49
+use crate::interrupts::{Interrupt, Interrupts};
+use crate::utils::{is_bit_set, set_bit};
 
-use crate::cpu::{Interrupt, Interrupts, is_bit_set, set_bit};
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 144;
+
 const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 const LIGHT_GRAY: [u8; 4] = [0xA9, 0xA9, 0xA9, 0xFF];
 const DARK_GRAY: [u8; 4] = [0x54, 0x54, 0x54, 0xFF];

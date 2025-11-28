@@ -1,5 +1,11 @@
 mod cpu;
 mod instruction;
+mod interrupts;
+mod joypad;
+mod mbc;
+mod memory;
 mod ppu;
 mod register;
+mod timer;
+mod utils;
 pub mod yb;

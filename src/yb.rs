@@ -1,4 +1,6 @@
-use crate::cpu::{CPU, JoypadKey};
+use crate::cpu::CPU;
+use crate::joypad::JoypadKey;
+
 use pixels::{Pixels, SurfaceTexture};
 use std::time::{Duration, Instant};
 use winit::{
