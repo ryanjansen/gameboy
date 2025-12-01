@@ -1,0 +1,5 @@
+Super Mario Land
+- Showing wrong tiles on game over
+- Sprites not scrolling out properly
+- Mario gets squished on the left side when walking into the border
+- Top row of pixels flicker on scroll
