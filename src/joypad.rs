@@ -4,8 +4,8 @@ pub struct Joypad {
     up: bool,
     down: bool,
     left: bool,
-    right: bool,
-    a: bool,
+    pub right: bool,
+    pub a: bool,
     b: bool,
     start: bool,
     select: bool,
@@ -64,22 +64,31 @@ impl Joypad {
                 | (if self.up { 0 } else { 1 }) << 2
                 | (if self.down { 0 } else { 1 }) << 3;
 
-            0x00 | lower_nibble
+            let upper_nibble = self.get_upper_nibble();
+
+            upper_nibble | lower_nibble
         } else if self.is_select_buttons {
             let lower_nibble = (if self.a { 0 } else { 1 })
                 | (if self.b { 0 } else { 1 }) << 1
                 | (if self.start { 0 } else { 1 }) << 2
                 | (if self.select { 0 } else { 1 }) << 3;
 
-            0x20 | lower_nibble
+            let upper_nibble = self.get_upper_nibble();
+            upper_nibble | lower_nibble
         } else {
-            0x3F
+            let upper_nibble = self.get_upper_nibble();
+            upper_nibble | 0x0F
         }
     }
 
     pub fn write(&mut self, val: u8) {
         self.is_select_buttons = !is_bit_set(val, 5);
         self.is_select_d_pad = !is_bit_set(val, 4);
+    }
+
+    fn get_upper_nibble(&self) -> u8 {
+        0_u8 | (if self.is_select_buttons { 0 } else { 1 }) << 5
+            | (if self.is_select_d_pad { 0 } else { 1 }) << 4
     }
 }
 

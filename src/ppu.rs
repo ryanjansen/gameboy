@@ -1,5 +1,5 @@
 use crate::interrupts::{Interrupt, Interrupts};
-use crate::utils::{is_bit_set, set_bit};
+use crate::utils::{is_bit_set, reset_bit, set_bit};
 
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 144;
@@ -136,11 +136,13 @@ impl PPU {
     fn update_stat(&mut self) {
         if self.line == self.lyc {
             self.stat = set_bit(self.stat, 2);
+        } else {
+            self.stat = reset_bit(self.stat, 2)
         }
 
         if self.is_ppu_enabled() {
             let mode_num = self.mode as u8;
-            self.stat = self.stat & (0b11111100 | (mode_num & 0b11))
+            self.stat = (self.stat & 0b11111100) | (mode_num & 0b11)
         } else {
             self.stat &= 0b11111100
         }
@@ -218,11 +220,9 @@ impl PPU {
     pub fn write_byte(&mut self, address: u16, val: u8) {
         match address {
             0x8000..=0x9FFF => {
-                // println!(
-                //     "WRITING TO VRAM, CLOCK: {}, LINE: {}, MODE: {:?}, ADDRESS: {:04X}, VALUE: {}",
-                //     self.debug_clock, self.line, self.mode, address, val
-                // );
-                self.vram[(address - 0x8000) as usize] = val
+                if self.is_vram_accessible() {
+                    self.vram[(address - 0x8000) as usize] = val
+                }
             }
             0xFE00..=0xFE9F => {
                 if self.is_oam_accessible() {
@@ -284,7 +284,6 @@ impl PPU {
     }
 
     fn render_line(&mut self) {
-        // println!("{:?}", self.mode);
         let mut scanline = [0xFFu8; 640];
         let mut bg_color_ids = [0xFFu8; 160];
 
@@ -303,24 +302,26 @@ impl PPU {
             return;
         }
 
-        let bg_y = (self.line.wrapping_add(self.scy) & 255) as u16;
-        let is_win_on_y = self.is_window_enabled() && (self.wy as u16) >= bg_y;
+        let bg_y = self.line.wrapping_add(self.scy) as u16;
+        let is_win_on_y = self.is_window_enabled() && (self.wy as u16) <= bg_y;
         let tile_y = bg_y >> 3;
 
         for (x, pixel) in scanline.chunks_exact_mut(4).enumerate() {
             let bg_x = (self.scx.wrapping_add(x as u8) & 255) as u16;
             let tile_x = bg_x >> 3;
 
-            let tilemap_base_address = if is_win_on_y && bg_x + 7 >= self.wx as u16 {
+            let is_win_pixel = is_win_on_y && (x + 7) as u8 >= self.wx;
+
+            let tilemap_base_address = if is_win_pixel {
                 // Window tilemap
-                if self.lcdc & (1 << 5) != 0 {
+                if is_bit_set(self.lcdc, 6) {
                     0x9C00
                 } else {
                     0x9800
                 }
             } else {
                 // BG tilemap
-                if self.lcdc & (1 << 3) != 0 {
+                if is_bit_set(self.lcdc, 3) {
                     0x9C00
                 } else {
                     0x9800
