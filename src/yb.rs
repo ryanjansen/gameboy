@@ -38,8 +38,8 @@ impl Yarboy {
     fn render(&mut self) {
         if let Some(pixels) = &mut self.pixels {
             while !self.cpu.ppu.is_ready_to_render() {
-                if self.is_debug {
-                    self.cpu.debug();
+                if self.is_debug && !self.cpu.debug() {
+                    self.is_debug = false;
                 }
 
                 self.cpu.step();
@@ -106,7 +106,7 @@ impl ApplicationHandler for Yarboy {
                 Key::Character("k") => self.cpu.joypad.set_key_pressed(JoypadKey::B),
                 Key::Named(NamedKey::Enter) => self.cpu.joypad.set_key_pressed(JoypadKey::Start),
                 Key::Character("p") => self.cpu.joypad.set_key_pressed(JoypadKey::Select),
-                Key::Named(NamedKey::Space) => self.cpu.debug(),
+                Key::Named(NamedKey::Space) => self.is_debug = true,
                 _ => (),
             },
             WindowEvent::KeyboardInput {

@@ -60,6 +60,10 @@ impl PPU {
 
     // Tick by one M-Cycle = 4 Dots
     pub fn tick(&mut self, interrupt_handler: &mut Interrupts) {
+        if !self.is_ppu_enabled() {
+            return;
+        }
+
         self.clock += 4;
         self.debug_clock += 1;
 
@@ -148,23 +152,41 @@ impl PPU {
         }
     }
 
+    fn turn_screen_off(&mut self) {
+        self.buffer = [0_u8; (WIDTH * HEIGHT * 4) as usize];
+    }
+
+    fn set_lcdc(&mut self, val: u8) {
+        let is_ppu_enable = is_bit_set(val, 7);
+
+        if self.is_ppu_enabled() && !is_ppu_enable {
+            self.turn_screen_off();
+        }
+
+        self.lcdc = val;
+    }
+
     fn is_ppu_enabled(&self) -> bool {
-        (self.lcdc & (1 << 7)) != 0
+        is_bit_set(self.lcdc, 7)
     }
 
     fn is_window_enabled(&self) -> bool {
-        (self.lcdc & 1) != 0 && (self.lcdc & (1 << 5)) != 0
+        is_bit_set(self.lcdc, 0) && is_bit_set(self.lcdc, 5)
     }
 
     fn is_bg_enabled(&self) -> bool {
-        (self.lcdc & 1) != 0
+        is_bit_set(self.lcdc, 0)
     }
 
     fn is_obj_enabled(&self) -> bool {
-        (self.lcdc & (1 << 1)) != 0
+        is_bit_set(self.lcdc, 1)
     }
 
     fn is_vram_accessible(&self) -> bool {
+        if !self.is_ppu_enabled() {
+            return true;
+        }
+
         match self.mode {
             Mode::Drawing => false,
             _ => true,
@@ -172,6 +194,10 @@ impl PPU {
     }
 
     fn is_oam_accessible(&self) -> bool {
+        if !self.is_ppu_enabled() {
+            return true;
+        }
+
         match self.mode {
             Mode::OAMScan | Mode::Drawing => false,
             _ => true,
@@ -229,7 +255,7 @@ impl PPU {
                     self.oam[(address - 0xFE00) as usize] = val
                 }
             }
-            0xFF40 => self.lcdc = val,
+            0xFF40 => self.set_lcdc(val),
             0xFF44 => panic!("Not allowed to write to LY"),
             0xFF45 => self.lyc = val,
             0xFF41 => self.stat = val,
@@ -287,7 +313,7 @@ impl PPU {
         let mut scanline = [0xFFu8; 640];
         let mut bg_color_ids = [0xFFu8; 160];
 
-        self.draw_bg(&mut scanline, &mut bg_color_ids);
+        self.draw_bg_and_win(&mut scanline, &mut bg_color_ids);
         self.draw_sprites(&mut scanline, &bg_color_ids);
 
         // Update buffer with scanline
@@ -297,18 +323,16 @@ impl PPU {
         dest_line.copy_from_slice(scanline.as_mut_slice());
     }
 
-    fn draw_bg(&self, scanline: &mut [u8], bg_color_ids: &mut [u8]) {
+    fn draw_bg_and_win(&self, scanline: &mut [u8], bg_color_ids: &mut [u8]) {
         if !self.is_bg_enabled() || !self.is_ppu_enabled() {
             return;
         }
 
         let bg_y = self.line.wrapping_add(self.scy) as u16;
-        let is_win_on_y = self.is_window_enabled() && (self.wy as u16) <= bg_y;
-        let tile_y = bg_y >> 3;
+        let is_win_on_y = self.is_window_enabled() && self.wy <= self.line;
 
         for (x, pixel) in scanline.chunks_exact_mut(4).enumerate() {
             let bg_x = (self.scx.wrapping_add(x as u8) & 255) as u16;
-            let tile_x = bg_x >> 3;
 
             let is_win_pixel = is_win_on_y && (x + 7) as u8 >= self.wx;
 
@@ -328,16 +352,31 @@ impl PPU {
                 }
             };
 
+            let tile_x = if is_win_pixel {
+                assert!(x as u8 >= self.wx);
+                (x.wrapping_sub(self.wx as usize) >> 3) as u16
+            } else {
+                bg_x >> 3
+            };
+
+            let tile_y = if is_win_pixel {
+                assert!(self.line >= self.wy);
+                (self.line.wrapping_sub(self.wy) >> 3) as u16
+            } else {
+                bg_y >> 3
+            };
+
             let tile_addr = tilemap_base_address + (32 * tile_y) + tile_x;
 
             let tile_id = self.read_vram(tile_addr);
 
-            let tile_row_addr = self.get_tile_address(tile_id, true) + (bg_y & 0b111) * 2;
+            let tile_row_addr = self.get_tile_address(tile_id, true)
+                + (if is_win_pixel { self.line as u16 } else { bg_y } & 0b111) * 2;
 
             let tile_row_1 = self.read_vram(tile_row_addr);
             let tile_row_2 = self.read_vram(tile_row_addr + 1);
 
-            let pixel_x = 7 - (bg_x & 0b111);
+            let pixel_x = 7 - (if is_win_pixel { x as u16 } else { bg_x } & 0b111);
 
             let color_id = self.get_color_id(tile_row_1, tile_row_2, pixel_x);
 

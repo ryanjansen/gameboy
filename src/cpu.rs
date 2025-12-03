@@ -17,7 +17,7 @@ pub struct CPU {
     ime: IME,
     is_halted: bool,
     next_addr: u16,
-    debugged: bool,
+    pub debugged: bool,
     watched_val: u8,
     watched_addr: u16,
 }
@@ -41,21 +41,8 @@ impl CPU {
         }
     }
 
-    fn debug_read(&self, address: u16) -> u8 {
-        match address {
-            0x0 => (self.timer.sysclock & 0xFF) as u8,
-            0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
-                self.ppu.read_byte(address)
-            }
-            0xFF04..=0xFF07 => self.timer.read_byte(address),
-            0xFF0F => self.interrupts.interrupt_flag,
-            0xFFFF => self.interrupts.interrupt_enable,
-            _ => self.memory.read_byte(address),
-        }
-    }
-
-    pub fn debug(&mut self) {
-        let val = self.debug_read(self.watched_addr);
+    pub fn debug(&mut self) -> bool {
+        let val = self.debug_read(self.watched_addr); // TODO: use debug modes (and create a seperate debugger)
 
         if !self.debugged || self.registers.pc == self.next_addr || val == self.watched_val {
             if self.registers.pc == self.next_addr {
@@ -76,7 +63,6 @@ impl CPU {
                 self.ppu.read_byte(0xFF40),
             );
 
-            self.debugged = true;
             println!("Enter next address to go to or inspect");
 
             loop {
@@ -114,12 +100,30 @@ impl CPU {
 
                     self.watched_val = val;
                     break;
+                } else if command == "e" {
+                    println!("Exiting debugger");
+                    return false;
                 } else {
                     println!(
                         "Invalid command, use g to go to address and m to view value at address"
                     );
                 }
             }
+        }
+
+        true
+    }
+
+    fn debug_read(&self, address: u16) -> u8 {
+        match address {
+            0x0 => (self.timer.sysclock & 0xFF) as u8,
+            0x8000..0x9FFF | 0xFE00..=0xFE9F | 0xFF40..=0xFF45 | 0xFF47..0xFF4B => {
+                self.ppu.read_byte(address)
+            }
+            0xFF04..=0xFF07 => self.timer.read_byte(address),
+            0xFF0F => self.interrupts.interrupt_flag,
+            0xFFFF => self.interrupts.interrupt_enable,
+            _ => self.memory.read_byte(address),
         }
     }
 

@@ -1,13 +1,10 @@
 use gameboy::yb::Yarboy;
 
-use std::fs;
-use std::io::{self, Read};
+use std::io::{self};
 use std::path::Path;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 type Error = Box<dyn std::error::Error>;
-
-const ROM_SIZE: usize = 0xFFFF;
 
 fn read_rom<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let buf = std::fs::read(path)?;

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::mbc::MBC1;
+use crate::mbc::{MBC1, MBC3};
 
 // TODO: Split memory into distinct regions
 pub struct Memory {
@@ -58,6 +58,24 @@ impl Memory {
                 let ram_size = Memory::get_ram_size(buffer[0x149]);
                 Box::new(MBC1::new(buffer, ram_size))
             }
+            0x0F => {
+                println!("NO RAM");
+                Box::new(MBC3::new(buffer, 0, None, None))
+            }
+            0x10 => {
+                let ram_size = Memory::get_ram_size(buffer[0x149]);
+                Box::new(MBC3::new(buffer, ram_size, None, None))
+            }
+            0x11 => Box::new(MBC3::new(buffer, 0, None, None)),
+            0x12 => {
+                let ram_size = Memory::get_ram_size(buffer[0x149]);
+                Box::new(MBC3::new(buffer, ram_size, None, None))
+            }
+            0x13 => {
+                let ram_size = Memory::get_ram_size(buffer[0x149]);
+                println!("RAM SIZE: {}", ram_size);
+                Box::new(MBC3::new(buffer, ram_size, None, None))
+            }
             _ => panic!("INVALID CARTRIDGE TYPE"),
         }
     }
@@ -67,8 +85,9 @@ impl Memory {
         match size {
             0 => 0,
             1 => 2 * kb,
-            3 => 8 * kb,
-            4 => 32 * kb,
+            2 => 8 * kb,
+            3 => 32 * kb,
+            4 => 128 * kb,
             5 => 64 * kb,
             _ => 0,
         }
